@@ -8,14 +8,9 @@ on:
 jobs:
   docker:
     runs-on: ubuntu-latest
-    steps:
-      -
-        name: clean
-        run: |
-          rm -rf /usr/share/dotnet
-          rm -rf /opt/ghc
-          rm -rf "/usr/local/share/boost"
-          rm -rf "$AGENT_TOOLSDIRECTORY"
+    steps:      
+      - name: Create more disk space
+        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /opt/ghc && sudo rm -rf "/usr/local/share/boost" && sudo rm -rf "$AGENT_TOOLSDIRECTORY"
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
