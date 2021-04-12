@@ -3,6 +3,12 @@ from fedora:latest
 RUN dnf -y groupinstall "Development Tools"
 RUN dnf -y install python cmake ninja-build gcc-c++
 
+# clean up
+sudo rm -rf /usr/share/dotnet
+sudo rm -rf /opt/ghc
+sudo rm -rf "/usr/local/share/boost"
+sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
 # Install cuda
 
 # install config-manager
