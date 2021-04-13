@@ -328,6 +328,7 @@ bool DeadArgumentEliminationPass::RemoveDeadArgumentsFromCallers(Function &Fn) {
         Changed = true;
       }
       UnusedArgs.push_back(Arg.getArgNo());
+      Fn.removeParamUndefImplyingAttrs(Arg.getArgNo());
     }
   }
 
@@ -345,6 +346,8 @@ bool DeadArgumentEliminationPass::RemoveDeadArgumentsFromCallers(Function &Fn) {
 
       Value *Arg = CB->getArgOperand(ArgNo);
       CB->setArgOperand(ArgNo, UndefValue::get(Arg->getType()));
+      CB->removeParamUndefImplyingAttrs(ArgNo);
+
       ++NumArgumentsReplacedWithUndef;
       Changed = true;
     }
@@ -390,7 +393,7 @@ DeadArgumentEliminationPass::Liveness
 DeadArgumentEliminationPass::MarkIfNotLive(RetOrArg Use,
                                            UseVector &MaybeLiveUses) {
   // We're live if our use or its Function is already marked as live.
-  if (LiveFunctions.count(Use.F) || LiveValues.count(Use))
+  if (IsLive(Use))
     return Live;
 
   // We're maybe live otherwise, but remember that we must become live if
@@ -570,11 +573,13 @@ void DeadArgumentEliminationPass::SurveyFunction(const Function &F) {
 
   // We can't modify arguments if the function is not local
   // but we can do so for SPIR kernel function in SYCL environment.
-  bool FuncIsSpirKernel =
+  // DAE is not currently supported for ESIMD kernels.
+  bool FuncIsSpirNonEsimdKernel =
       CheckSpirKernels &&
       StringRef(F.getParent()->getTargetTriple()).contains("sycldevice") &&
-      F.getCallingConv() == CallingConv::SPIR_KERNEL;
-  bool FuncIsLive = !F.hasLocalLinkage() && !FuncIsSpirKernel;
+      F.getCallingConv() == CallingConv::SPIR_KERNEL &&
+      !F.getMetadata("sycl_explicit_simd");
+  bool FuncIsLive = !F.hasLocalLinkage() && !FuncIsSpirNonEsimdKernel;
   if (FuncIsLive && (!ShouldHackArguments || F.isIntrinsic())) {
     MarkLive(F);
     return;
@@ -697,10 +702,18 @@ void DeadArgumentEliminationPass::MarkValue(const RetOrArg &RA, Liveness L,
       MarkLive(RA);
       break;
     case MaybeLive:
-      // Note any uses of this value, so this return value can be
-      // marked live whenever one of the uses becomes live.
-      for (const auto &MaybeLiveUse : MaybeLiveUses)
-        Uses.insert(std::make_pair(MaybeLiveUse, RA));
+      assert(!IsLive(RA) && "Use is already live!");
+      for (const auto &MaybeLiveUse : MaybeLiveUses) {
+        if (IsLive(MaybeLiveUse)) {
+          // A use is live, so this value is live.
+          MarkLive(RA);
+          break;
+        } else {
+          // Note any uses of this value, so this value can be
+          // marked live whenever one of the uses becomes live.
+          Uses.insert(std::make_pair(MaybeLiveUse, RA));
+        }
+      }
       break;
   }
 }
@@ -726,15 +739,18 @@ void DeadArgumentEliminationPass::MarkLive(const Function &F) {
 /// mark any values that are used by this value (according to Uses) live as
 /// well.
 void DeadArgumentEliminationPass::MarkLive(const RetOrArg &RA) {
-  if (LiveFunctions.count(RA.F))
-    return; // Function was already marked Live.
+  if (IsLive(RA))
+    return; // Already marked Live.
 
-  if (!LiveValues.insert(RA).second)
-    return; // We were already marked Live.
+  LiveValues.insert(RA);
 
   LLVM_DEBUG(dbgs() << "DeadArgumentEliminationPass - Marking "
                     << RA.getDescription() << " live\n");
   PropagateLiveness(RA);
+}
+
+bool DeadArgumentEliminationPass::IsLive(const RetOrArg &RA) {
+  return LiveFunctions.count(RA.F) || LiveValues.count(RA);
 }
 
 /// PropagateLiveness - Given that RA is a live value, propagate it's liveness

@@ -31,6 +31,9 @@
 // % 1 = bitcast<16 x i32> * % 0 to %
 // "class._ZTSN2cm3gen4simdIiLi16EEE.cm::gen::simd" *
 //
+// It is OK not to rewrite a function (for example, when its address is taken)
+// since it does not affect correctness. But that may lead to vector backend
+// not being able to hold the value in GRF and generate memory references.
 //
 // Change in global variables:
 //
@@ -64,38 +67,14 @@
 //        i64 0, i32 0))
 //===----------------------------------------------------------------------===//
 
+#include "llvm/SYCLLowerIR/LowerESIMD.h"
+
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "ESIMDLowerVecArg"
-
-namespace llvm {
-
-// Forward declarations
-void initializeESIMDLowerVecArgLegacyPassPass(PassRegistry &);
-ModulePass *createESIMDLowerVecArgPass();
-
-// Pass converts simd* function parameters and globals to
-// llvm's first-class vector* type.
-class ESIMDLowerVecArgPass {
-public:
-  bool run(Module &M);
-
-private:
-  DenseMap<GlobalVariable *, GlobalVariable *> OldNewGlobal;
-
-  Function *rewriteFunc(Function &F);
-  Type *getSimdArgPtrTyOrNull(Value *arg);
-  void fixGlobals(Module &M);
-  void replaceConstExprWithGlobals(Module &M);
-  ConstantExpr *createNewConstantExpr(GlobalVariable *newGlobalVar,
-                                      Type *oldGlobalType, Value *old);
-  void removeOldGlobals();
-};
-
-} // namespace llvm
 
 namespace {
 class ESIMDLowerVecArgLegacyPass : public ModulePass {
@@ -106,8 +85,9 @@ public:
   }
 
   bool runOnModule(Module &M) override {
-    auto Modified = Impl.run(M);
-    return Modified;
+    ModuleAnalysisManager MAM;
+    Impl.run(M, MAM);
+    return true;
   }
 
   bool doInitialization(Module &M) override { return false; }
@@ -182,10 +162,15 @@ Function *ESIMDLowerVecArgPass::rewriteFunc(Function &F) {
     VMap.insert(std::make_pair(Arg, NF->getArg(I)));
   }
 
-  llvm::CloneFunctionInto(NF, &F, VMap, F.getSubprogram() != nullptr, Returns);
+  llvm::CloneFunctionInto(NF, &F, VMap,
+                          CloneFunctionChangeType::LocalChangesOnly, Returns);
 
+  // insert bitcasts in new function only if its a definition
   for (auto &B : BitCasts) {
-    NF->begin()->getInstList().push_front(B);
+    if (!F.isDeclaration())
+      NF->begin()->getInstList().push_front(B);
+    else
+      delete B;
   }
 
   NF->takeName(&F);
@@ -229,41 +214,6 @@ Function *ESIMDLowerVecArgPass::rewriteFunc(Function &F) {
   return NF;
 }
 
-// Replace ConstantExpr if it contains old global variable.
-ConstantExpr *
-ESIMDLowerVecArgPass::createNewConstantExpr(GlobalVariable *NewGlobalVar,
-                                            Type *OldGlobalType, Value *Old) {
-  ConstantExpr *NewConstantExpr = nullptr;
-
-  if (isa<GlobalVariable>(Old)) {
-    NewConstantExpr = cast<ConstantExpr>(
-        ConstantExpr::getBitCast(NewGlobalVar, OldGlobalType));
-    return NewConstantExpr;
-  }
-
-  auto InnerMost = createNewConstantExpr(
-      NewGlobalVar, OldGlobalType, cast<ConstantExpr>(Old)->getOperand(0));
-
-  NewConstantExpr = cast<ConstantExpr>(
-      cast<ConstantExpr>(Old)->getWithOperandReplaced(0, InnerMost));
-
-  return NewConstantExpr;
-}
-
-// Globals are part of ConstantExpr. This loop iterates over
-// all such instances and replaces them with a new ConstantExpr
-// consisting of new global vector* variable.
-void ESIMDLowerVecArgPass::replaceConstExprWithGlobals(Module &M) {
-  for (auto &GlobalVars : OldNewGlobal) {
-    auto &G = *GlobalVars.first;
-    for (auto UseOfG : G.users()) {
-      auto NewGlobal = GlobalVars.second;
-      auto NewConstExpr = createNewConstantExpr(NewGlobal, G.getType(), UseOfG);
-      UseOfG->replaceAllUsesWith(NewConstExpr);
-    }
-  }
-}
-
 // This function creates new global variables of type vector* type
 // when old one is of simd* type.
 void ESIMDLowerVecArgPass::fixGlobals(Module &M) {
@@ -272,10 +222,13 @@ void ESIMDLowerVecArgPass::fixGlobals(Module &M) {
     if (NewTy && !G.user_empty()) {
       // Peel off ptr type that getSimdArgPtrTyOrNull applies
       NewTy = NewTy->getPointerElementType();
-      auto ZeroInit = ConstantAggregateZero::get(NewTy);
+      auto InitVal =
+          G.hasInitializer() && isa<UndefValue>(G.getInitializer())
+              ? static_cast<ConstantData *>(UndefValue::get(NewTy))
+              : static_cast<ConstantData *>(ConstantAggregateZero::get(NewTy));
       auto NewGlobalVar =
-          new GlobalVariable(NewTy, G.isConstant(), G.getLinkage(), ZeroInit,
-                             "", G.getThreadLocalMode(), G.getAddressSpace());
+          new GlobalVariable(NewTy, G.isConstant(), G.getLinkage(), InitVal, "",
+                             G.getThreadLocalMode(), G.getAddressSpace());
       NewGlobalVar->setExternallyInitialized(G.isExternallyInitialized());
       NewGlobalVar->copyAttributesFrom(&G);
       NewGlobalVar->takeName(&G);
@@ -285,25 +238,29 @@ void ESIMDLowerVecArgPass::fixGlobals(Module &M) {
     }
   }
 
-  replaceConstExprWithGlobals(M);
-
   removeOldGlobals();
 }
 
 // Remove old global variables from the program.
 void ESIMDLowerVecArgPass::removeOldGlobals() {
   for (auto &G : OldNewGlobal) {
-    G.first->removeDeadConstantUsers();
-    G.first->eraseFromParent();
+    auto OldGlob = G.first;
+    auto NewGlobal = G.second;
+    OldGlob->replaceAllUsesWith(
+        ConstantExpr::getBitCast(NewGlobal, OldGlob->getType()));
+    OldGlob->eraseFromParent();
   }
 }
 
-bool ESIMDLowerVecArgPass::run(Module &M) {
+PreservedAnalyses ESIMDLowerVecArgPass::run(Module &M,
+                                            ModuleAnalysisManager &) {
   fixGlobals(M);
 
   SmallVector<Function *, 10> functions;
   for (auto &F : M) {
-    functions.push_back(&F);
+    // Skip functions that are used through function pointers.
+    if (!F.hasAddressTaken())
+      functions.push_back(&F);
   }
 
   for (auto F : functions) {
@@ -315,6 +272,5 @@ bool ESIMDLowerVecArgPass::run(Module &M) {
       }
     }
   }
-
-  return true;
+  return PreservedAnalyses::none();
 }

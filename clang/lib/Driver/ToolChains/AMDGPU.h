@@ -64,6 +64,13 @@ public:
   bool IsIntegratedAssemblerDefault() const override { return true; }
   bool IsMathErrnoDefault() const override { return false; }
 
+  bool useIntegratedAs() const override { return true; }
+  bool isCrossCompiling() const override { return true; }
+  bool isPICDefault() const override { return false; }
+  bool isPIEDefault() const override { return false; }
+  bool isPICDefaultForced() const override { return false; }
+  bool SupportsProfiling() const override { return false; }
+
   llvm::opt::DerivedArgList *
   TranslateArgs(const llvm::opt::DerivedArgList &Args, StringRef BoundArch,
                 Action::OffloadKind DeviceOffloadKind) const override;
@@ -90,12 +97,14 @@ public:
   /// Needed for translating LTO options.
   const char *getDefaultLinker() const override { return "ld.lld"; }
 
-protected:
-  /// Translate -mcpu option containing target ID to cc1 options.
-  /// Returns the GPU name.
-  StringRef translateTargetID(const llvm::opt::ArgList &DriverArgs,
-                              llvm::opt::ArgStringList &CC1Args) const;
+  /// Should skip argument.
+  bool shouldSkipArgument(const llvm::opt::Arg *Arg) const;
 
+protected:
+  /// Check and diagnose invalid target ID specified by -mcpu.
+  void checkTargetID(const llvm::opt::ArgList &DriverArgs) const;
+
+  /// Get GPU arch from -mcpu without checking.
   StringRef getGPUArch(const llvm::opt::ArgList &DriverArgs) const;
 };
 

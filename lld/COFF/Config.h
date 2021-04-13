@@ -80,6 +80,13 @@ enum class GuardCFLevel {
   Full,      // Enable all protections.
 };
 
+enum class ICFLevel {
+  None,
+  Safe, // Safe ICF for all sections.
+  All,  // Aggressive ICF for code, but safe ICF for data, similar to MSVC's
+        // behavior.
+};
+
 // Global configuration.
 struct Configuration {
   enum ManifestKind { SideBySide, Embed, No };
@@ -95,7 +102,7 @@ struct Configuration {
   std::string importName;
   bool demangle = true;
   bool doGC = true;
-  bool doICF = true;
+  ICFLevel doICF = ICFLevel::None;
   bool tailMerge;
   bool relocatable = true;
   bool forceMultiple = false;
@@ -157,6 +164,11 @@ struct Configuration {
   // Used for /opt:lldltocachepolicy=policy
   llvm::CachePruningPolicy ltoCachePolicy;
 
+  // Used for /opt:[no]ltonewpassmanager
+  bool ltoNewPassManager = false;
+  // Used for /opt:[no]ltodebugpassmanager
+  bool ltoDebugPassManager = false;
+
   // Used for /merge:from=to (e.g. /merge:.rdata=.text)
   std::map<StringRef, StringRef> merge;
 
@@ -203,6 +215,12 @@ struct Configuration {
   // Used for /lto-obj-path:
   llvm::StringRef ltoObjPath;
 
+  // Used for /lto-cs-profile-generate:
+  bool ltoCSProfileGenerate = false;
+
+  // Used for /lto-cs-profile-path
+  llvm::StringRef ltoCSProfileFile;
+
   // Used for /call-graph-ordering-file:
   llvm::MapVector<std::pair<const SectionChunk *, const SectionChunk *>,
                   uint64_t>
@@ -221,8 +239,12 @@ struct Configuration {
   uint64_t heapCommit = 4096;
   uint32_t majorImageVersion = 0;
   uint32_t minorImageVersion = 0;
+  // If changing the default os/subsys version here, update the default in
+  // the MinGW driver accordingly.
   uint32_t majorOSVersion = 6;
   uint32_t minorOSVersion = 0;
+  uint32_t majorSubsystemVersion = 6;
+  uint32_t minorSubsystemVersion = 0;
   uint32_t timestamp = 0;
   uint32_t functionPadMin = 0;
   bool dynamicBase = true;

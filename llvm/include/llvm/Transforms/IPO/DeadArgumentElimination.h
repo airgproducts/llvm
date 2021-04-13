@@ -134,6 +134,7 @@ private:
   Liveness SurveyUses(const Value *V, UseVector &MaybeLiveUses);
 
   void SurveyFunction(const Function &F);
+  bool IsLive(const RetOrArg &RA);
   void MarkValue(const RetOrArg &RA, Liveness L,
                  const UseVector &MaybeLiveUses);
   void MarkLive(const RetOrArg &RA);
@@ -142,6 +143,19 @@ private:
   bool RemoveDeadStuffFromFunction(Function *F);
   bool DeleteDeadVarargs(Function &Fn);
   bool RemoveDeadArgumentsFromCallers(Function &Fn);
+};
+
+class DeadArgumentEliminationSYCLPass
+    : public PassInfoMixin<DeadArgumentEliminationSYCLPass> {
+public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
+    return Impl.run(M, MAM);
+  }
+
+private:
+  DeadArgumentEliminationPass Impl =
+      DeadArgumentEliminationPass(/* ShouldHackArguemtns */ false,
+                                  /* CheckSpirKernels */ true);
 };
 
 } // end namespace llvm

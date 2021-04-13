@@ -148,7 +148,7 @@ static ModRefInfo GetLocation(const Instruction *Inst, MemoryLocation &Loc,
 
   if (const CallInst *CI = isFreeCall(Inst, &TLI)) {
     // calls to free() deallocate the entire structure
-    Loc = MemoryLocation(CI->getArgOperand(0));
+    Loc = MemoryLocation::getAfter(CI->getArgOperand(0));
     return ModRefInfo::Mod;
   }
 
@@ -165,6 +165,12 @@ static ModRefInfo GetLocation(const Instruction *Inst, MemoryLocation &Loc,
       Loc = MemoryLocation::getForArgument(II, 2, TLI);
       // These intrinsics don't really modify the memory, but returning Mod
       // will allow them to be handled conservatively.
+      return ModRefInfo::Mod;
+    case Intrinsic::masked_load:
+      Loc = MemoryLocation::getForArgument(II, 0, TLI);
+      return ModRefInfo::Ref;
+    case Intrinsic::masked_store:
+      Loc = MemoryLocation::getForArgument(II, 1, TLI);
       return ModRefInfo::Mod;
     default:
       break;
@@ -235,16 +241,6 @@ MemDepResult MemoryDependenceResults::getCallDependencyFrom(
   if (BB != &BB->getParent()->getEntryBlock())
     return MemDepResult::getNonLocal();
   return MemDepResult::getNonFuncLocal();
-}
-
-static bool isVolatile(Instruction *Inst) {
-  if (auto *LI = dyn_cast<LoadInst>(Inst))
-    return LI->isVolatile();
-  if (auto *SI = dyn_cast<StoreInst>(Inst))
-    return SI->isVolatile();
-  if (auto *AI = dyn_cast<AtomicCmpXchgInst>(Inst))
-    return AI->isVolatile();
-  return false;
 }
 
 MemDepResult MemoryDependenceResults::getPointerDependencyFrom(
@@ -338,7 +334,9 @@ MemoryDependenceResults::getInvariantGroupPointerDependency(LoadInst *LI,
       // If we hit load/store with the same invariant.group metadata (and the
       // same pointer operand) we can assume that value pointed by pointer
       // operand didn't change.
-      if ((isa<LoadInst>(U) || isa<StoreInst>(U)) &&
+      if ((isa<LoadInst>(U) ||
+           (isa<StoreInst>(U) &&
+            cast<StoreInst>(U)->getPointerOperand() == Ptr)) &&
           U->hasMetadata(LLVMContext::MD_invariant_group))
         ClosestDependency = GetClosestDependency(ClosestDependency, U);
     }
@@ -442,14 +440,31 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
     if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(Inst)) {
       // If we reach a lifetime begin or end marker, then the query ends here
       // because the value is undefined.
-      if (II->getIntrinsicID() == Intrinsic::lifetime_start) {
+      Intrinsic::ID ID = II->getIntrinsicID();
+      switch (ID) {
+      case Intrinsic::lifetime_start: {
         // FIXME: This only considers queries directly on the invariant-tagged
         // pointer, not on query pointers that are indexed off of them.  It'd
         // be nice to handle that at some point (the right approach is to use
         // GetPointerBaseWithConstantOffset).
-        if (BatchAA.isMustAlias(MemoryLocation(II->getArgOperand(1)), MemLoc))
+        MemoryLocation ArgLoc = MemoryLocation::getAfter(II->getArgOperand(1));
+        if (BatchAA.isMustAlias(ArgLoc, MemLoc))
           return MemDepResult::getDef(II);
         continue;
+      }
+      case Intrinsic::masked_load:
+      case Intrinsic::masked_store: {
+        MemoryLocation Loc;
+        /*ModRefInfo MR =*/ GetLocation(II, Loc, TLI);
+        AliasResult R = BatchAA.alias(Loc, MemLoc);
+        if (R == NoAlias)
+          continue;
+        if (R == MustAlias)
+          return MemDepResult::getDef(II);
+        if (ID == Intrinsic::masked_load)
+          continue;
+        return MemDepResult::getClobber(II);
+      }
       }
     }
 
@@ -466,7 +481,7 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
         if (!QueryInst)
           // Original QueryInst *may* be volatile
           return MemDepResult::getClobber(LI);
-        if (isVolatile(QueryInst))
+        if (QueryInst->isVolatile())
           // Ordering required if QueryInst is itself volatile
           return MemDepResult::getClobber(LI);
         // Otherwise, volatile doesn't imply any special ordering
@@ -729,8 +744,7 @@ MemoryDependenceResults::getNonLocalCallDependency(CallBase *QueryCall) {
   } else {
     // Seed DirtyBlocks with each of the preds of QueryInst's block.
     BasicBlock *QueryBB = QueryCall->getParent();
-    for (BasicBlock *Pred : PredCache.get(QueryBB))
-      DirtyBlocks.push_back(Pred);
+    append_range(DirtyBlocks, PredCache.get(QueryBB));
     ++NumUncacheNonLocal;
   }
 
@@ -744,8 +758,7 @@ MemoryDependenceResults::getNonLocalCallDependency(CallBase *QueryCall) {
 
   // Iterate while we still have blocks to update.
   while (!DirtyBlocks.empty()) {
-    BasicBlock *DirtyBB = DirtyBlocks.back();
-    DirtyBlocks.pop_back();
+    BasicBlock *DirtyBB = DirtyBlocks.pop_back_val();
 
     // Already processed this block?
     if (!Visited.insert(DirtyBB).second)
@@ -815,8 +828,7 @@ MemoryDependenceResults::getNonLocalCallDependency(CallBase *QueryCall) {
 
       // If the block *is* completely transparent to the load, we need to check
       // the predecessors of this block.  Add them to our worklist.
-      for (BasicBlock *Pred : PredCache.get(DirtyBB))
-        DirtyBlocks.push_back(Pred);
+      append_range(DirtyBlocks, PredCache.get(DirtyBB));
     }
   }
 
@@ -860,7 +872,7 @@ void MemoryDependenceResults::getNonLocalPointerDependency(
     }
     return false;
   };
-  if (isVolatile(QueryInst) || isOrdered(QueryInst)) {
+  if (QueryInst->isVolatile() || isOrdered(QueryInst)) {
     Result.push_back(NonLocalDepResult(FromBB, MemDepResult::getUnknown(),
                                        const_cast<Value *>(Loc.Ptr)));
     return;
@@ -993,7 +1005,7 @@ SortNonLocalDepInfoCache(MemoryDependenceResults::NonLocalDepInfo &Cache,
       NonLocalDepEntry Val = Cache.back();
       Cache.pop_back();
       MemoryDependenceResults::NonLocalDepInfo::iterator Entry =
-          std::upper_bound(Cache.begin(), Cache.end(), Val);
+          llvm::upper_bound(Cache, Val);
       Cache.insert(Entry, Val);
     }
     break;
@@ -1111,9 +1123,6 @@ bool MemoryDependenceResults::getNonLocalPointerDepFromBB(
 
   // If we have valid cached information for exactly the block we are
   // investigating, just return it with no recomputation.
-  // Don't use cached information for invariant loads since it is valid for
-  // non-invariant loads only.
-  //
   // Don't use cached information for invariant loads since it is valid for
   // non-invariant loads only.
   if (!IsIncomplete && !isInvariantLoad &&

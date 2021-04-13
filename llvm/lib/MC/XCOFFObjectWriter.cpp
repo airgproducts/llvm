@@ -49,7 +49,6 @@ namespace {
 
 constexpr unsigned DefaultSectionAlign = 4;
 constexpr int16_t MaxSectionIndex = INT16_MAX;
-constexpr uint16_t MaxTOCSizeInARegion = UINT16_MAX;
 
 // Packs the csect's alignment and type into a byte.
 uint8_t getEncodedType(const MCSectionXCOFF *);
@@ -139,12 +138,13 @@ struct Section {
       Group->clear();
   }
 
-  Section(const char *N, XCOFF::SectionTypeFlags Flags, bool IsVirtual,
+  Section(StringRef N, XCOFF::SectionTypeFlags Flags, bool IsVirtual,
           CsectGroups Groups)
-      : Address(0), Size(0), FileOffsetToData(0), FileOffsetToRelocations(0),
-        RelocationCount(0), Flags(Flags), Index(UninitializedIndex),
-        IsVirtual(IsVirtual), Groups(Groups) {
-    strncpy(Name, N, XCOFF::NameSize);
+      : Name(), Address(0), Size(0), FileOffsetToData(0),
+        FileOffsetToRelocations(0), RelocationCount(0), Flags(Flags),
+        Index(UninitializedIndex), IsVirtual(IsVirtual), Groups(Groups) {
+    assert(N.size() <= XCOFF::NameSize && "section name too long");
+    memcpy(Name, N.data(), N.size());
   }
 };
 
@@ -431,12 +431,15 @@ void XCOFFObjectWriter::recordRelocation(MCAssembler &Asm,
     FixedValue = getVirtualAddress(SymA, SymASec) + Target.getConstant();
   else if (Type == XCOFF::RelocationType::R_TOC ||
            Type == XCOFF::RelocationType::R_TOCL) {
-    // The FixedValue should be the TC entry offset from TOC-base.
-    FixedValue = SectionMap[SymASec]->Address - TOCCsects.front().Address;
-    if (FixedValue >= MaxTOCSizeInARegion)
-      report_fatal_error(
-          "handling of TOC entries could not fit in the initial TOC "
-          "entry region is not yet supported");
+    // The FixedValue should be the TOC entry offset from the TOC-base plus any
+    // constant offset value.
+    const int64_t TOCEntryOffset = SectionMap[SymASec]->Address -
+                                   TOCCsects.front().Address +
+                                   Target.getConstant();
+    if (Type == XCOFF::RelocationType::R_TOC && !isInt<16>(TOCEntryOffset))
+      report_fatal_error("TOCEntryOffset overflows in small code model mode");
+
+    FixedValue = TOCEntryOffset;
   }
 
   assert(
@@ -710,6 +713,30 @@ void XCOFFObjectWriter::writeRelocations() {
 }
 
 void XCOFFObjectWriter::writeSymbolTable(const MCAsmLayout &Layout) {
+  // Write symbol 0 as C_FILE.
+  // FIXME: support 64-bit C_FILE symbol.
+  //
+  // n_name. The n_name of a C_FILE symbol is the source filename when no
+  // auxiliary entries are present. The source filename is alternatively
+  // provided by an auxiliary entry, in which case the n_name of the C_FILE
+  // symbol is `.file`.
+  // FIXME: add the real source filename.
+  writeSymbolName(".file");
+  // n_value. The n_value of a C_FILE symbol is its symbol table index.
+  W.write<uint32_t>(0);
+  // n_scnum. N_DEBUG is a reserved section number for indicating a special
+  // symbolic debugging symbol.
+  W.write<int16_t>(XCOFF::ReservedSectionNum::N_DEBUG);
+  // n_type. The n_type field of a C_FILE symbol encodes the source language and
+  // CPU version info; zero indicates no info.
+  W.write<uint16_t>(0);
+  // n_sclass. The C_FILE symbol provides source file-name information,
+  // source-language ID and CPU-version ID information and some other optional
+  // infos.
+  W.write<uint8_t>(XCOFF::C_FILE);
+  // n_numaux. No aux entry for now.
+  W.write<uint8_t>(0);
+
   for (const auto &Csect : UndefinedCsects) {
     writeSymbolTableEntryForControlSection(
         Csect, XCOFF::ReservedSectionNum::N_UNDEF, Csect.MCCsect->getStorageClass());
@@ -782,9 +809,8 @@ void XCOFFObjectWriter::finalizeSectionInfo() {
 }
 
 void XCOFFObjectWriter::assignAddressesAndIndices(const MCAsmLayout &Layout) {
-  // The first symbol table entry is for the file name. We are not emitting it
-  // yet, so start at index 0.
-  uint32_t SymbolTableIndex = 0;
+  // The first symbol table entry (at index 0) is for the file name.
+  uint32_t SymbolTableIndex = 1;
 
   // Calculate indices for undefined symbols.
   for (auto &Csect : UndefinedCsects) {

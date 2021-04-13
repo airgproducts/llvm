@@ -89,6 +89,18 @@ void SPIRVToOCL::visitCallInst(CallInst &CI) {
     visitCallSPIRVImageMediaBlockBuiltin(&CI, OC);
     return;
   }
+  if (isCvtOpCode(OC)) {
+    visitCallSPIRVCvtBuiltin(&CI, OC, DemangledName);
+    return;
+  }
+  if (OC == OpGroupAsyncCopy) {
+    visitCallAsyncWorkGroupCopy(&CI, OC);
+    return;
+  }
+  if (OC == OpGroupWaitEvents) {
+    visitCallGroupWaitEvents(&CI, OC);
+    return;
+  }
   if (OCLSPIRVBuiltinMap::rfind(OC))
     visitCallSPIRVBuiltin(&CI, OC);
 }
@@ -190,13 +202,13 @@ void SPIRVToOCL::visitCallSPRIVImageQuerySize(CallInst *CI) {
           GetImageSize,
           FixedVectorType::get(
               CI->getType()->getScalarType(),
-              cast<VectorType>(GetImageSize->getType())->getNumElements()),
+              cast<FixedVectorType>(GetImageSize->getType())->getNumElements()),
           false, CI->getName(), CI);
     }
   }
 
   if (ImgArray || ImgDim == 3) {
-    auto *VecTy = cast<VectorType>(CI->getType());
+    auto *VecTy = cast<FixedVectorType>(CI->getType());
     const unsigned ImgQuerySizeRetEls = VecTy->getNumElements();
 
     if (ImgDim == 1) {
@@ -224,7 +236,7 @@ void SPIRVToOCL::visitCallSPRIVImageQuerySize(CallInst *CI) {
   if (ImgArray) {
     assert((ImgDim == 1 || ImgDim == 2) && "invalid image array type");
     // Insert get_image_array_size to the last position of the resulting vector.
-    auto *VecTy = cast<VectorType>(CI->getType());
+    auto *VecTy = cast<FixedVectorType>(CI->getType());
     Type *SizeTy =
         Type::getIntNTy(*Ctx, M->getDataLayout().getPointerSizeInBits(0));
     Instruction *GetImageArraySize = addCallInst(
@@ -381,7 +393,9 @@ std::string SPIRVToOCL::groupOCToOCLBuiltinName(CallInst *CI, Op OC) {
   return FuncName;
 }
 
-static bool extendRetTyToi32(Op OC) {
+/// Return true if the original boolean return type needs to be changed to i32
+/// when mapping the SPIR-V op to an OpenCL builtin.
+static bool needsInt32RetTy(Op OC) {
   return OC == OpGroupAny || OC == OpGroupAll || OC == OpGroupNonUniformAny ||
          OC == OpGroupNonUniformAll || OC == OpGroupNonUniformAllEqual ||
          OC == OpGroupNonUniformElect || OC == OpGroupNonUniformInverseBallot ||
@@ -408,15 +422,17 @@ void SPIRVToOCL::visitCallSPIRVGroupBuiltin(CallInst *CI, Op OC) {
       Args[0] = CastInst::CreateZExtOrBitCast(Args[0], Int32Ty, "", CI);
 
     // Handle function return type
-    if (extendRetTyToi32(OC))
+    if (needsInt32RetTy(OC))
       RetTy = Int32Ty;
 
     return FuncName;
   };
   auto ModifyRetTy = [=](CallInst *CI) -> Instruction * {
-    if (extendRetTyToi32(OC)) {
-      Type *RetTy = Type::getInt1Ty(*Ctx);
-      return CastInst::CreateTruncOrBitCast(CI, RetTy, "", CI->getNextNode());
+    if (needsInt32RetTy(OC)) {
+      // The OpenCL builtin returns a non-zero integer value. Convert to a
+      // boolean value.
+      Constant *Zero = ConstantInt::get(CI->getType(), 0);
+      return new ICmpInst(CI->getNextNode(), CmpInst::ICMP_NE, CI, Zero);
     } else
       return CI;
   };
@@ -482,7 +498,7 @@ void SPIRVToOCL::visitCallSPIRVImageMediaBlockBuiltin(CallInst *CI, Op OC) {
         else
           assert(0 && "Unsupported texel type!");
 
-        if (auto *VecTy = dyn_cast<VectorType>(RetType)) {
+        if (auto *VecTy = dyn_cast<FixedVectorType>(RetType)) {
           unsigned int NumEl = VecTy->getNumElements();
           assert((NumEl == 2 || NumEl == 4 || NumEl == 8 || NumEl == 16) &&
                  "Wrong function type!");
@@ -490,6 +506,59 @@ void SPIRVToOCL::visitCallSPIRVImageMediaBlockBuiltin(CallInst *CI, Op OC) {
         }
 
         return OCLSPIRVBuiltinMap::rmap(OC) + FuncPostfix;
+      },
+      &Attrs);
+}
+
+void SPIRVToOCL::visitCallSPIRVCvtBuiltin(CallInst *CI, Op OC,
+                                          StringRef DemangledName) {
+  AttributeList Attrs = CI->getCalledFunction()->getAttributes();
+  mutateCallInstOCL(
+      M, CI,
+      [=](CallInst *Call, std::vector<Value *> &Args) {
+        std::string CastBuiltInName;
+        if (isCvtFromUnsignedOpCode(OC))
+          CastBuiltInName = "u";
+        CastBuiltInName += kOCLBuiltinName::ConvertPrefix;
+        Type *DstTy = Call->getType();
+        CastBuiltInName +=
+            mapLLVMTypeToOCLType(DstTy, !isCvtToUnsignedOpCode(OC));
+        if (DemangledName.find("_sat") != StringRef::npos || isSatCvtOpCode(OC))
+          CastBuiltInName += "_sat";
+        Value *Src = Call->getOperand(0);
+        assert(Src && "Invalid SPIRV convert builtin call");
+        Type *SrcTy = Src->getType();
+        auto Loc = DemangledName.find("_rt");
+        if (Loc != StringRef::npos &&
+            !(isa<IntegerType>(SrcTy) && isa<IntegerType>(DstTy)))
+          CastBuiltInName += DemangledName.substr(Loc, 4).str();
+        return CastBuiltInName;
+      },
+      &Attrs);
+}
+
+void SPIRVToOCL::visitCallAsyncWorkGroupCopy(CallInst *CI, Op OC) {
+  AttributeList Attrs = CI->getCalledFunction()->getAttributes();
+  mutateCallInstOCL(
+      M, CI,
+      [=](CallInst *, std::vector<Value *> &Args) {
+        // First argument of AsyncWorkGroupCopy instruction is Scope, OCL
+        // built-in async_work_group_strided_copy doesn't have this argument
+        Args.erase(Args.begin());
+        return OCLSPIRVBuiltinMap::rmap(OC);
+      },
+      &Attrs);
+}
+
+void SPIRVToOCL::visitCallGroupWaitEvents(CallInst *CI, Op OC) {
+  AttributeList Attrs = CI->getCalledFunction()->getAttributes();
+  mutateCallInstOCL(
+      M, CI,
+      [=](CallInst *, std::vector<Value *> &Args) {
+        // First argument of GroupWaitEvents instruction is Scope, OCL
+        // built-in wait_group_events doesn't have this argument
+        Args.erase(Args.begin());
+        return OCLSPIRVBuiltinMap::rmap(OC);
       },
       &Attrs);
 }
@@ -533,8 +602,7 @@ llvm::createSPIRVBIsLoweringPass(Module &M,
   case SPIRV::BIsRepresentation::SPIRVFriendlyIR:
     // nothing to do, already done
     return nullptr;
-  default:
-    llvm_unreachable("Unsupported built-ins representation");
-    return nullptr;
   }
+  llvm_unreachable("Unsupported built-ins representation");
+  return nullptr;
 }

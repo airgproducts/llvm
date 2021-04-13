@@ -45,7 +45,8 @@ static void AsanDie() {
     // Don't die twice - run a busy loop.
     while (1) { }
   }
-  if (common_flags()->print_module_map >= 1) PrintModuleMap();
+  if (common_flags()->print_module_map >= 1)
+    DumpProcessMap();
   if (flags()->sleep_before_dying) {
     Report("Sleeping for %d second(s)\n", flags()->sleep_before_dying);
     SleepForSeconds(flags()->sleep_before_dying);
@@ -489,9 +490,6 @@ static void AsanInitInternal() {
   if (flags()->start_deactivated)
     AsanDeactivate();
 
-  // interceptors
-  InitTlsSize();
-
   // Create main thread.
   AsanThread *main_thread = CreateMainThread();
   CHECK_EQ(0, main_thread->tid());
@@ -567,7 +565,7 @@ void UnpoisonStack(uptr bottom, uptr top, const char *type) {
         type, top, bottom, top - bottom, top - bottom);
     return;
   }
-  PoisonShadow(bottom, top - bottom, 0);
+  PoisonShadow(bottom, RoundUpTo(top - bottom, SHADOW_GRANULARITY), 0);
 }
 
 static void UnpoisonDefaultStack() {

@@ -8,6 +8,12 @@
 
 // UNSUPPORTED: c++03
 
+// XFAIL: LIBCXX-WINDOWS-FIXME
+
+// The string reported on errors changed, which makes those tests fail when run
+// against already-released libc++'s.
+// XFAIL: with_system_cxx_lib=macosx10.15
+
 // <filesystem>
 
 // class directory_entry
@@ -21,8 +27,6 @@
 
 #include "filesystem_test_helper.h"
 #include "rapid-cxx-test.h"
-
-#include <iostream>
 
 #include "test_macros.h"
 
@@ -85,8 +89,10 @@ TEST_CASE(not_regular_file) {
     std::errc expected_err;
   } TestCases[] = {
       {env.create_dir("dir"), std::errc::is_a_directory},
+#ifndef _WIN32
       {env.create_fifo("fifo"), std::errc::not_supported},
-      {env.create_symlink("dir", "sym"), std::errc::is_a_directory}};
+#endif
+      {env.create_directory_symlink("dir", "sym"), std::errc::is_a_directory}};
 
   for (auto const& TC : TestCases) {
     const path& p = TC.p;

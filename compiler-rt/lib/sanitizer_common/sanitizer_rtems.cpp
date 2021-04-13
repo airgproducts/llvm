@@ -106,9 +106,6 @@ void DisableCoreDumperIfNecessary() {}
 void InstallDeadlySignalHandlers(SignalHandlerType handler) {}
 void SetAlternateSignalStack() {}
 void UnsetAlternateSignalStack() {}
-void InitTlsSize() {}
-
-void PrintModuleMap() {}
 
 void SignalContext::DumpAllRegisters(void *context) {}
 const char *DescribeSignalOrException(int signo) { UNIMPLEMENTED(); }

@@ -10,19 +10,28 @@ define dso_local i32 @mul_reduce_add(i32* noalias nocapture readonly %a, i32* no
 ; CHECK-NEXT:    bxeq lr
 ; CHECK-NEXT:  .LBB0_1: @ %vector.ph
 ; CHECK-NEXT:    push {r7, lr}
-; CHECK-NEXT:    vmov.i32 q1, #0x0
+; CHECK-NEXT:    adds r3, r2, #3
+; CHECK-NEXT:    vmov.i32 q0, #0x0
+; CHECK-NEXT:    bic r3, r3, #3
+; CHECK-NEXT:    sub.w r12, r3, #4
+; CHECK-NEXT:    movs r3, #1
+; CHECK-NEXT:    add.w r12, r3, r12, lsr #2
 ; CHECK-NEXT:    movs r3, #0
-; CHECK-NEXT:    dlstp.32 lr, r2
+; CHECK-NEXT:    dls lr, r12
 ; CHECK-NEXT:  .LBB0_2: @ %vector.body
 ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    vldrw.u32 q0, [r0], #16
-; CHECK-NEXT:    vldrw.u32 q2, [r1], #16
+; CHECK-NEXT:    vctp.32 r2
+; CHECK-NEXT:    vmov q1, q0
+; CHECK-NEXT:    vpstt
+; CHECK-NEXT:    vldrwt.u32 q0, [r0], #16
+; CHECK-NEXT:    vldrwt.u32 q2, [r1], #16
 ; CHECK-NEXT:    adds r3, #4
 ; CHECK-NEXT:    vmul.i32 q0, q2, q0
-; CHECK-NEXT:    vadd.i32 q1, q0, q1
-; CHECK-NEXT:    letp lr, .LBB0_2
+; CHECK-NEXT:    subs r2, #4
+; CHECK-NEXT:    vadd.i32 q0, q0, q1
+; CHECK-NEXT:    le lr, .LBB0_2
 ; CHECK-NEXT:  @ %bb.3: @ %middle.block
-; CHECK-NEXT:    vmov q0, q1
+; CHECK-NEXT:    vpsel q0, q0, q1
 ; CHECK-NEXT:    vaddv.u32 r0, q0
 ; CHECK-NEXT:    pop {r7, pc}
 entry:
@@ -61,7 +70,7 @@ vector.body:                                      ; preds = %vector.body, %vecto
 
 middle.block:                                     ; preds = %vector.body
   %8 = select <4 x i1> %1, <4 x i32> %6, <4 x i32> %vec.phi
-  %9 = call i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32> %8)
+  %9 = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %8)
   br label %for.cond.cleanup
 
 for.cond.cleanup:                                 ; preds = %middle.block, %entry
@@ -78,17 +87,26 @@ define dso_local i32 @mul_reduce_add_const(i32* noalias nocapture readonly %a, i
 ; CHECK-NEXT:    bxeq lr
 ; CHECK-NEXT:  .LBB1_1: @ %vector.ph
 ; CHECK-NEXT:    push {r7, lr}
-; CHECK-NEXT:    vmov.i32 q1, #0x0
+; CHECK-NEXT:    adds r1, r2, #3
+; CHECK-NEXT:    movs r3, #1
+; CHECK-NEXT:    bic r1, r1, #3
+; CHECK-NEXT:    vmov.i32 q0, #0x0
+; CHECK-NEXT:    subs r1, #4
+; CHECK-NEXT:    add.w r3, r3, r1, lsr #2
 ; CHECK-NEXT:    movs r1, #0
-; CHECK-NEXT:    dlstp.32 lr, r2
+; CHECK-NEXT:    dls lr, r3
 ; CHECK-NEXT:  .LBB1_2: @ %vector.body
 ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    vldrw.u32 q0, [r0], #16
+; CHECK-NEXT:    vctp.32 r2
+; CHECK-NEXT:    vmov q1, q0
+; CHECK-NEXT:    vpst
+; CHECK-NEXT:    vldrwt.u32 q0, [r0], #16
 ; CHECK-NEXT:    adds r1, #4
-; CHECK-NEXT:    vadd.i32 q1, q0, q1
-; CHECK-NEXT:    letp lr, .LBB1_2
+; CHECK-NEXT:    subs r2, #4
+; CHECK-NEXT:    vadd.i32 q0, q0, q1
+; CHECK-NEXT:    le lr, .LBB1_2
 ; CHECK-NEXT:  @ %bb.3: @ %middle.block
-; CHECK-NEXT:    vmov q0, q1
+; CHECK-NEXT:    vpsel q0, q0, q1
 ; CHECK-NEXT:    vaddv.u32 r0, q0
 ; CHECK-NEXT:    pop {r7, pc}
 entry:
@@ -123,7 +141,7 @@ vector.body:                                      ; preds = %vector.body, %vecto
 
 middle.block:                                     ; preds = %vector.body
   %5 = select <4 x i1> %1, <4 x i32> %3, <4 x i32> %vec.phi
-  %6 = call i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32> %5)
+  %6 = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %5)
   br label %for.cond.cleanup
 
 for.cond.cleanup:                                 ; preds = %middle.block, %entry
@@ -140,17 +158,26 @@ define dso_local i32 @add_reduce_add_const(i32* noalias nocapture readonly %a, i
 ; CHECK-NEXT:    bxeq lr
 ; CHECK-NEXT:  .LBB2_1: @ %vector.ph
 ; CHECK-NEXT:    push {r7, lr}
-; CHECK-NEXT:    vmov.i32 q1, #0x0
+; CHECK-NEXT:    adds r1, r2, #3
+; CHECK-NEXT:    movs r3, #1
+; CHECK-NEXT:    bic r1, r1, #3
+; CHECK-NEXT:    vmov.i32 q0, #0x0
+; CHECK-NEXT:    subs r1, #4
+; CHECK-NEXT:    add.w r3, r3, r1, lsr #2
 ; CHECK-NEXT:    movs r1, #0
-; CHECK-NEXT:    dlstp.32 lr, r2
+; CHECK-NEXT:    dls lr, r3
 ; CHECK-NEXT:  .LBB2_2: @ %vector.body
 ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    vldrw.u32 q0, [r0], #16
+; CHECK-NEXT:    vctp.32 r2
+; CHECK-NEXT:    vmov q1, q0
+; CHECK-NEXT:    vpst
+; CHECK-NEXT:    vldrwt.u32 q0, [r0], #16
 ; CHECK-NEXT:    adds r1, #4
-; CHECK-NEXT:    vadd.i32 q1, q0, q1
-; CHECK-NEXT:    letp lr, .LBB2_2
+; CHECK-NEXT:    subs r2, #4
+; CHECK-NEXT:    vadd.i32 q0, q0, q1
+; CHECK-NEXT:    le lr, .LBB2_2
 ; CHECK-NEXT:  @ %bb.3: @ %middle.block
-; CHECK-NEXT:    vmov q0, q1
+; CHECK-NEXT:    vpsel q0, q0, q1
 ; CHECK-NEXT:    vaddv.u32 r0, q0
 ; CHECK-NEXT:    pop {r7, pc}
 entry:
@@ -185,7 +212,7 @@ vector.body:                                      ; preds = %vector.body, %vecto
 
 middle.block:                                     ; preds = %vector.body
   %5 = select <4 x i1> %1, <4 x i32> %3, <4 x i32> %vec.phi
-  %6 = call i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32> %5)
+  %6 = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %5)
   br label %for.cond.cleanup
 
 for.cond.cleanup:                                 ; preds = %middle.block, %entry
@@ -432,7 +459,7 @@ declare <4 x i32> @llvm.masked.load.v4i32.p0v4i32(<4 x i32>*, i32 immarg, <4 x i
 declare void @llvm.masked.store.v16i8.p0v16i8(<16 x i8>, <16 x i8>*, i32 immarg, <16 x i1>)
 declare void @llvm.masked.store.v8i16.p0v8i16(<8 x i16>, <8 x i16>*, i32 immarg, <8 x i1>)
 declare void @llvm.masked.store.v4i32.p0v4i32(<4 x i32>, <4 x i32>*, i32 immarg, <4 x i1>)
-declare i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32>)
+declare i32 @llvm.vector.reduce.add.v4i32(<4 x i32>)
 declare <4 x i1> @llvm.get.active.lane.mask.v4i1.i32(i32, i32)
 declare <8 x i1> @llvm.get.active.lane.mask.v8i1.i32(i32, i32)
 declare <16 x i1> @llvm.get.active.lane.mask.v16i1.i32(i32, i32)

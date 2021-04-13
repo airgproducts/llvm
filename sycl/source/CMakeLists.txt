@@ -61,41 +61,50 @@ function(add_sycl_rt_library LIB_NAME)
     endif()
   endif()
 
+  target_compile_definitions(${LIB_OBJ_NAME} PRIVATE SYCL2020_DISABLE_DEPRECATION_WARNINGS)
+
   target_include_directories(
-      ${LIB_OBJ_NAME}
-      PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        "${sycl_inc_dir}"
-        ${OpenCL_INCLUDE_DIRS}
+    ${LIB_OBJ_NAME}
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      "${sycl_inc_dir}"
+      ${OpenCL_INCLUDE_DIRS}
   )
 
   find_package(Threads REQUIRED)
 
   target_link_libraries(${LIB_NAME}
-      PRIVATE
-        ${OpenCL_LIBRARIES}
-        ${CMAKE_DL_LIBS}
-        ${CMAKE_THREAD_LIBS_INIT}
-      PUBLIC
-        $<$<BOOL:${SYCL_BUILD_PI_CUDA}>:pi_cuda>
+    PRIVATE
+      ${OpenCL_LIBRARIES}
+      ${CMAKE_DL_LIBS}
+      ${CMAKE_THREAD_LIBS_INIT}
+    PUBLIC
+      $<$<BOOL:${SYCL_BUILD_PI_CUDA}>:pi_cuda>
   )
 
   target_compile_definitions(${LIB_OBJ_NAME}
     PUBLIC
       $<$<BOOL:${SYCL_BUILD_PI_CUDA}>:USE_PI_CUDA>)
 
-  add_common_options(${LIB_NAME})
+  add_common_options(${LIB_NAME} ${LIB_OBJ_NAME})
 
   set_target_properties(${LIB_NAME} PROPERTIES
                         VERSION ${SYCL_VERSION_STRING}
                         SOVERSION ${SYCL_MAJOR_VERSION})
 
+  check_cxx_compiler_flag(-Winstantiation-after-specialization
+    HAS_INST_AFTER_SPEC)
+  if (HAS_INST_AFTER_SPEC)
+    target_compile_options(${LIB_OBJ_NAME} PRIVATE
+      -Winstantiation-after-specialization)
+  endif()
 endfunction(add_sycl_rt_library)
 
 set(SYCL_SOURCES
     "${sycl_inc_dir}/CL/sycl.hpp"
     "backend/opencl.cpp"
     "backend/level_zero.cpp"
+    "backend.cpp"
     "detail/accessor_impl.cpp"
     "detail/buffer_impl.cpp"
     "detail/builtins_common.cpp"
@@ -108,10 +117,13 @@ set(SYCL_SOURCES
     "detail/config.cpp"
     "detail/context_impl.cpp"
     "detail/device_binary_image.cpp"
+    "detail/device_filter.cpp"
     "detail/device_impl.cpp"
     "detail/error_handling/enqueue_kernel.cpp"
     "detail/event_impl.cpp"
+    "detail/filter_selector_impl.cpp"
     "detail/force_device.cpp"
+    "detail/global_handler.cpp"
     "detail/helpers.cpp"
     "detail/handler_proxy.cpp"
     "detail/image_accessor_util.cpp"
@@ -123,7 +135,9 @@ set(SYCL_SOURCES
     "detail/program_impl.cpp"
     "detail/program_manager/program_manager.cpp"
     "detail/queue_impl.cpp"
+    "detail/online_compiler/online_compiler.cpp"
     "detail/os_util.cpp"
+    "detail/persistent_device_code_cache.cpp"
     "detail/platform_util.cpp"
     "detail/reduction.cpp"
     "detail/sampler_impl.cpp"
@@ -131,6 +145,7 @@ set(SYCL_SOURCES
     "detail/scheduler/commands.cpp"
     "detail/scheduler/leaves_collection.cpp"
     "detail/scheduler/scheduler.cpp"
+    "detail/scheduler/scheduler_helpers.cpp"
     "detail/scheduler/graph_processor.cpp"
     "detail/scheduler/graph_builder.cpp"
     "detail/spec_constant_impl.cpp"
@@ -150,6 +165,7 @@ set(SYCL_SOURCES
     "interop_handle.cpp"
     "interop_handler.cpp"
     "kernel.cpp"
+    "kernel_bundle.cpp"
     "platform.cpp"
     "program.cpp"
     "queue.cpp"
@@ -180,7 +196,6 @@ if (MSVC)
   endif()
 
   set(SYCL_EXTRA_OPTS "/MD")
-
 endif()
 
 if (SYCL_ENABLE_XPTI_TRACING)
@@ -197,6 +212,6 @@ if (libdevice IN_LIST LLVM_ENABLE_PROJECTS)
 endif()
 
 install(TARGETS ${SYCL_RT_LIBS}
-    ARCHIVE DESTINATION "lib${LLVM_LIBDIR_SUFFIX}" COMPONENT sycl
-    LIBRARY DESTINATION "lib${LLVM_LIBDIR_SUFFIX}" COMPONENT sycl
-    RUNTIME DESTINATION "bin" COMPONENT sycl)
+  ARCHIVE DESTINATION "lib${LLVM_LIBDIR_SUFFIX}" COMPONENT sycl
+  LIBRARY DESTINATION "lib${LLVM_LIBDIR_SUFFIX}" COMPONENT sycl
+  RUNTIME DESTINATION "bin" COMPONENT sycl)

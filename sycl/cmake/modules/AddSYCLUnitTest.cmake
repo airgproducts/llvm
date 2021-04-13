@@ -31,11 +31,20 @@ macro(add_sycl_unittest test_dirname link_variant)
       OpenCL-Headers
       ${SYCL_LINK_LIBS}
     )
-  target_include_directories(${test_dirname} PRIVATE SYSTEM
+  target_include_directories(${test_dirname}
+    PRIVATE SYSTEM
       ${sycl_inc_dir}
       ${SYCL_SOURCE_DIR}/source/
       ${SYCL_SOURCE_DIR}/unittests/
     )
+  if (UNIX)
+    # These warnings are coming from Google Test code.
+    target_compile_options(${test_dirname}
+      PRIVATE
+        -Wno-unused-parameter
+        -Wno-inconsistent-missing-override
+    )
+  endif()
   # LLVM gtest uses LLVM utilities that require C++-14
   # CXX_STANDARD_REQUIRED makes CXX_STANDARD a hard requirement.
   set_target_properties(${test_dirname}
@@ -91,9 +100,9 @@ macro(add_sycl_unittest_with_device test_dirname link_variant)
 
   if ("${link_variant}" MATCHES "OBJECT")
     add_sycl_executable(${test_dirname}
-      OPTIONS -nolibsycl ${COMMON_OPTS} ${LLVM_PTHREAD_LIB}
+      OPTIONS -nolibsycl ${COMMON_OPTS} ${LLVM_PTHREAD_LIB} ${TERMINFO_LIB}
       SOURCES ${ARGN} $<TARGET_OBJECTS:${sycl_obj_target}>
-      LIBRARIES gtest_main gtest LLVMSupport LLVMTestingSupport OpenCL ${EXTRA_LIBS} ${TERMINFO_LIBS}
+      LIBRARIES gtest_main gtest LLVMSupport LLVMTestingSupport OpenCL ${EXTRA_LIBS}
       DEPENDANTS SYCLUnitTests)
   else()
     # TODO support shared library case.

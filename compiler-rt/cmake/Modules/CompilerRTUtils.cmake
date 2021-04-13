@@ -158,6 +158,7 @@ macro(detect_target_arch)
   check_symbol_exists(__i386__ "" __I386)
   check_symbol_exists(__mips__ "" __MIPS)
   check_symbol_exists(__mips64__ "" __MIPS64)
+  check_symbol_exists(__powerpc__ "" __PPC)
   check_symbol_exists(__powerpc64__ "" __PPC64)
   check_symbol_exists(__powerpc64le__ "" __PPC64LE)
   check_symbol_exists(__riscv "" __RISCV)
@@ -179,10 +180,12 @@ macro(detect_target_arch)
     add_default_target_arch(mips64)
   elseif(__MIPS)
     add_default_target_arch(mips)
-  elseif(__PPC64)
+  elseif(__PPC64) # must be checked before __PPC
     add_default_target_arch(powerpc64)
   elseif(__PPC64LE)
     add_default_target_arch(powerpc64le)
+  elseif(__PPC)
+    add_default_target_arch(powerpc)
   elseif(__RISCV)
     if(CMAKE_SIZEOF_VOID_P EQUAL "4")
       add_default_target_arch(riscv32)
@@ -323,6 +326,14 @@ macro(construct_compiler_rt_default_triple)
 
   string(REPLACE "-" ";" TARGET_TRIPLE_LIST ${COMPILER_RT_DEFAULT_TARGET_TRIPLE})
   list(GET TARGET_TRIPLE_LIST 0 COMPILER_RT_DEFAULT_TARGET_ARCH)
+
+  # Map various forms of the architecture names to the canonical forms
+  # (as they are used by clang, see getArchNameForCompilerRTLib).
+  if("${COMPILER_RT_DEFAULT_TARGET_ARCH}" MATCHES "^i.86$")
+    # Android uses i686, but that's remapped at a later stage.
+    set(COMPILER_RT_DEFAULT_TARGET_ARCH "i386")
+  endif()
+
   # Determine if test target triple is specified explicitly, and doesn't match the
   # default.
   if(NOT COMPILER_RT_DEFAULT_TARGET_TRIPLE STREQUAL TARGET_TRIPLE)

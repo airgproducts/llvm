@@ -88,9 +88,11 @@ void llvm::fillMapFromAssume(CallInst &AssumeCI, RetainedKnowledgeMap &Result) {
       Result[Key][&Assume] = {0, 0};
       continue;
     }
-    unsigned Val = cast<ConstantInt>(
-                       getValueFromBundleOpInfo(Assume, Bundles, ABA_Argument))
-                       ->getZExtValue();
+    auto *CI = dyn_cast<ConstantInt>(
+        getValueFromBundleOpInfo(Assume, Bundles, ABA_Argument));
+    if (!CI)
+      continue;
+    unsigned Val = CI->getZExtValue();
     auto Lookup = Result.find(Key);
     if (Lookup == Result.end() || !Lookup->second.count(&Assume)) {
       Result[Key][&Assume] = {Val, Val};
@@ -108,10 +110,17 @@ llvm::getKnowledgeFromBundle(CallInst &Assume,
   Result.AttrKind = Attribute::getAttrKindFromName(BOI.Tag->getKey());
   if (bundleHasArgument(BOI, ABA_WasOn))
     Result.WasOn = getValueFromBundleOpInfo(Assume, BOI, ABA_WasOn);
+  auto GetArgOr1 = [&](unsigned Idx) -> unsigned {
+    if (auto *ConstInt = dyn_cast<ConstantInt>(
+            getValueFromBundleOpInfo(Assume, BOI, ABA_Argument + Idx)))
+      return ConstInt->getZExtValue();
+    return 1;
+  };
   if (BOI.End - BOI.Begin > ABA_Argument)
-    Result.ArgValue =
-        cast<ConstantInt>(getValueFromBundleOpInfo(Assume, BOI, ABA_Argument))
-            ->getZExtValue();
+    Result.ArgValue = GetArgOr1(0);
+  if (Result.AttrKind == Attribute::Alignment)
+    if (BOI.End - BOI.Begin > ABA_Argument + 1)
+      Result.ArgValue = MinAlign(Result.ArgValue, GetArgOr1(1));
   return Result;
 }
 
@@ -150,9 +159,8 @@ llvm::getKnowledgeFromUse(const Use *U,
     return RetainedKnowledge::none();
   RetainedKnowledge RK =
       getKnowledgeFromBundle(*cast<CallInst>(U->getUser()), *Bundle);
-  for (auto Attr : AttrKinds)
-    if (Attr == RK.AttrKind)
-      return RK;
+  if (llvm::is_contained(AttrKinds, RK.AttrKind))
+    return RK;
   return RetainedKnowledge::none();
 }
 

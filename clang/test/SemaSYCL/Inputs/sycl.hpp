@@ -3,7 +3,7 @@
 
 // Shared code for SYCL tests
 
-namespace cl {
+inline namespace cl {
 namespace sycl {
 namespace access {
 
@@ -37,13 +37,20 @@ enum class address_space : int {
 };
 } // namespace access
 
-namespace property {
-template <int>
-class buffer_location {};
-} // namespace property
-
-template <typename... properties>
 class property_list {};
+
+namespace INTEL {
+namespace property {
+struct buffer_location {
+  template <int> class instance {};
+};
+} // namespace property
+} // namespace INTEL
+
+namespace ONEAPI {
+template <typename... properties>
+class accessor_property_list {};
+} // namespace ONEAPI
 
 namespace detail {
 namespace half_impl {
@@ -95,7 +102,7 @@ struct DeviceValueType<dataT, access::target::local> {
 template <typename dataT, int dimensions, access::mode accessmode,
           access::target accessTarget = access::target::global_buffer,
           access::placeholder isPlaceholder = access::placeholder::false_t,
-          typename propertyListT = property_list<>>
+          typename propertyListT = ONEAPI::accessor_property_list<>>
 class accessor {
 
 public:
@@ -107,7 +114,6 @@ private:
   using PtrType = typename DeviceValueType<dataT, accessTarget>::type *;
   void __init(PtrType Ptr, range<dimensions> AccessRange,
               range<dimensions> MemRange, id<dimensions> Offset) {}
-  propertyListT prop_list;
 };
 
 template <int dimensions, access::mode accessmode, access::target accesstarget>
@@ -200,20 +206,81 @@ template <typename Type>
 struct get_kernel_name_t<auto_name, Type> {
   using name = Type;
 };
+
+template <int dimensions = 1>
+class group {
+public:
+  group() = default; // fake constructor
+};
+
+class kernel_handler {
+  void __init_specialization_constants_buffer(char *specialization_constants_buffer) {}
+};
+
+// Used when parallel_for range is rounded-up.
+template <typename Type> class __pf_kernel_wrapper;
+
+template <typename Type> struct get_kernel_wrapper_name_t {
+  using name =
+      __pf_kernel_wrapper<typename get_kernel_name_t<auto_name, Type>::name>;
+};
+
 #define ATTR_SYCL_KERNEL __attribute__((sycl_kernel))
 template <typename KernelName = auto_name, typename KernelType>
 ATTR_SYCL_KERNEL void kernel_single_task(const KernelType &kernelFunc) {
+  kernelFunc(); // #KernelSingleTaskKernelFuncCall
+}
+template <typename KernelName = auto_name, typename KernelType>
+ATTR_SYCL_KERNEL void kernel_single_task(const KernelType &kernelFunc, kernel_handler kh) {
+  kernelFunc(kh);
+}
+template <typename KernelName = auto_name, typename KernelType>
+ATTR_SYCL_KERNEL void kernel_parallel_for(const KernelType &kernelFunc) {
   kernelFunc();
 }
+template <typename KernelName, typename KernelType>
+ATTR_SYCL_KERNEL void kernel_parallel_for_work_group(const KernelType &KernelFunc, kernel_handler kh) {
+  KernelFunc(group<1>(), kh);
+}
+
 class handler {
 public:
   template <typename KernelName = auto_name, typename KernelType>
   void single_task(const KernelType &kernelFunc) {
     using NameT = typename get_kernel_name_t<KernelName, KernelType>::name;
 #ifdef __SYCL_DEVICE_ONLY__
-    kernel_single_task<NameT>(kernelFunc);
+    kernel_single_task<NameT>(kernelFunc); // #KernelSingleTask
 #else
     kernelFunc();
+#endif
+  }
+  template <typename KernelName = auto_name, typename KernelType>
+  void single_task(const KernelType &kernelFunc, kernel_handler kh) {
+    using NameT = typename get_kernel_name_t<KernelName, KernelType>::name;
+#ifdef __SYCL_DEVICE_ONLY__
+    kernel_single_task<NameT>(kernelFunc, kh);
+#else
+    kernelFunc(kh);
+#endif
+  }
+  template <typename KernelName = auto_name, typename KernelType>
+  void parallel_for(const KernelType &kernelObj) {
+    using NameT = typename get_kernel_name_t<KernelName, KernelType>::name;
+    using NameWT = typename get_kernel_wrapper_name_t<NameT>::name;
+#ifdef __SYCL_DEVICE_ONLY__
+    kernel_parallel_for<NameT>(kernelObj);
+#else
+    kernelObj();
+#endif
+  }
+  template <typename KernelName = auto_name, typename KernelType>
+  void parallel_for_work_group(const KernelType &kernelFunc, kernel_handler kh) {
+    using NameT = typename get_kernel_name_t<KernelName, KernelType>::name;
+#ifdef __SYCL_DEVICE_ONLY__
+    kernel_parallel_for_work_group<NameT>(kernelFunc, kh);
+#else
+    group<1> G;
+    kernelFunc(G, kh);
 #endif
   }
 };

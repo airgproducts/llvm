@@ -38,22 +38,17 @@
 #define DEBUG_TYPE "spvbool"
 
 #include "SPIRVInternal.h"
+#include "libSPIRV/SPIRVDebug.h"
+
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
 
 using namespace llvm;
 using namespace SPIRV;
 
 namespace SPIRV {
-cl::opt<bool> SPIRVLowerBoolValidate(
-    "spvbool-validate",
-    cl::desc("Validate module after lowering boolean instructions for SPIR-V"));
-
 class SPIRVLowerBool : public ModulePass, public InstVisitor<SPIRVLowerBool> {
 public:
   SPIRVLowerBool() : ModulePass(ID), Context(nullptr) {
@@ -82,41 +77,42 @@ public:
       replace(&I, Cmp);
     }
   }
-  virtual void visitZExtInst(ZExtInst &I) {
+  void handleExtInstructions(Instruction &I) {
     auto Op = I.getOperand(0);
     if (isBoolType(Op->getType())) {
+      auto Opcode = I.getOpcode();
       auto Ty = I.getType();
+      auto Zero = getScalarOrVectorConstantInt(Ty, 0, false);
+      auto One = getScalarOrVectorConstantInt(
+          Ty, (Opcode == Instruction::SExt) ? ~0 : 1, false);
+      assert(Zero && One && "Couldn't create constant int");
+      auto Sel = SelectInst::Create(Op, One, Zero, "", &I);
+      replace(&I, Sel);
+    }
+  }
+  void handleCastInstructions(Instruction &I) {
+    auto Op = I.getOperand(0);
+    auto *OpTy = Op->getType();
+    if (isBoolType(OpTy)) {
+      Type *Ty = Type::getInt32Ty(*Context);
+      if (auto VT = dyn_cast<FixedVectorType>(OpTy))
+        Ty = llvm::FixedVectorType::get(Ty, VT->getNumElements());
       auto Zero = getScalarOrVectorConstantInt(Ty, 0, false);
       auto One = getScalarOrVectorConstantInt(Ty, 1, false);
       assert(Zero && One && "Couldn't create constant int");
       auto Sel = SelectInst::Create(Op, One, Zero, "", &I);
-      replace(&I, Sel);
+      I.setOperand(0, Sel);
     }
   }
-  virtual void visitSExtInst(SExtInst &I) {
-    auto Op = I.getOperand(0);
-    if (isBoolType(Op->getType())) {
-      auto Ty = I.getType();
-      auto Zero = getScalarOrVectorConstantInt(Ty, 0, false);
-      auto One = getScalarOrVectorConstantInt(Ty, ~0, false);
-      assert(Zero && One && "Couldn't create constant int");
-      auto Sel = SelectInst::Create(Op, One, Zero, "", &I);
-      replace(&I, Sel);
-    }
-  }
+  virtual void visitZExtInst(ZExtInst &I) { handleExtInstructions(I); }
+  virtual void visitSExtInst(SExtInst &I) { handleExtInstructions(I); }
+  virtual void visitUIToFPInst(UIToFPInst &I) { handleCastInstructions(I); }
+  virtual void visitSIToFPInst(SIToFPInst &I) { handleCastInstructions(I); }
   bool runOnModule(Module &M) override {
     Context = &M.getContext();
     visit(M);
 
-    if (SPIRVLowerBoolValidate) {
-      LLVM_DEBUG(dbgs() << "After SPIRVLowerBool:\n" << M);
-      std::string Err;
-      raw_string_ostream ErrorOS(Err);
-      if (verifyModule(M, &ErrorOS)) {
-        Err = std::string("Fails to verify module: ") + Err;
-        report_fatal_error(Err.c_str(), false);
-      }
-    }
+    verifyRegularizationPass(M, "SPIRVLowerBool");
     return true;
   }
 

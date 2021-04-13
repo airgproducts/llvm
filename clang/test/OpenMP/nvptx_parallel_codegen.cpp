@@ -4,7 +4,7 @@
 // RUN: %clang_cc1 -verify -fopenmp -x c++ -triple nvptx64-unknown-unknown -fopenmp-targets=nvptx64-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-ppc-host.bc -o - -disable-llvm-optzns -fopenmp-cuda-parallel-target-regions | FileCheck %s --check-prefix CHECK --check-prefix CHECK-64 --check-prefix PAR
 // RUN: %clang_cc1 -verify -fopenmp -x c++ -triple i386-unknown-unknown -fopenmp-targets=nvptx-nvidia-cuda -emit-llvm-bc %s -o %t-x86-host.bc
 // RUN: %clang_cc1 -verify -fopenmp -x c++ -triple nvptx-unknown-unknown -fopenmp-targets=nvptx-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-x86-host.bc -o - -disable-llvm-optzns | FileCheck %s --check-prefix CHECK --check-prefix CHECK-32 --check-prefix SEQ
-// RUN: %clang_cc1 -verify -fopenmp -fexceptions -fcxx-exceptions -x c++ -triple nvptx-unknown-unknown -fopenmp-targets=nvptx-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-x86-host.bc -o - -disable-llvm-optzns | FileCheck %s --check-prefix CHECK --check-prefix CHECK-32 --check-prefix SEQ
+// RUN: %clang_cc1 -verify -fopenmp -fexceptions -fcxx-exceptions -x c++ -triple nvptx-unknown-unknown -fopenmp-targets=nvptx-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-x86-host.bc -o - -disable-llvm-optzns -disable-O0-optnone | FileCheck %s --check-prefix CHECK --check-prefix CHECK-32 --check-prefix SEQ
 // RUN: %clang_cc1 -verify -fopenmp -x c++ -triple nvptx-unknown-unknown -fopenmp-targets=nvptx-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-x86-host.bc -o - -disable-llvm-optzns -fopenmp-cuda-parallel-target-regions | FileCheck %s --check-prefix CHECK --check-prefix CHECK-32 --check-prefix PAR
 // RUN: %clang_cc1 -verify -fopenmp -fexceptions -fcxx-exceptions -x c++ -triple nvptx-unknown-unknown -fopenmp-targets=nvptx-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-x86-host.bc -o - -disable-llvm-optzns -fopenmp-cuda-parallel-target-regions | FileCheck %s --check-prefix CHECK --check-prefix CHECK-32 --check-prefix PAR
 // expected-no-diagnostics
@@ -76,8 +76,8 @@ int bar(int n){
 }
 
 // SEQ: [[MEM_TY:%.+]] = type { [128 x i8] }
-// SEQ-DAG: [[SHARED_GLOBAL_RD:@.+]] = common addrspace(3) global [[MEM_TY]] zeroinitializer
-// SEQ-DAG: [[KERNEL_PTR:@.+]] = internal addrspace(3) global i8* null
+// SEQ-DAG: [[SHARED_GLOBAL_RD:@.+]] = weak addrspace(3) global [[MEM_TY]] undef
+// SEQ-DAG: [[KERNEL_PTR:@.+]] = internal addrspace(3) global i8* undef
 // SEQ-DAG: [[KERNEL_SIZE:@.+]] = internal unnamed_addr constant i{{64|32}} 4
 // SEQ-DAG: [[KERNEL_SHARED:@.+]] = internal unnamed_addr constant i16 1
 
@@ -91,7 +91,7 @@ int bar(int n){
 // CHECK: br label {{%?}}[[AWAIT_WORK:.+]]
 //
 // CHECK: [[AWAIT_WORK]]
-// CHECK: call void @__kmpc_barrier_simple_spmd(%struct.ident_t* null, i32 0) #[[#CONVERGENT:]]
+// CHECK: call void @__kmpc_barrier_simple_spmd(%struct.ident_t* null, i32 0)
 // CHECK: [[KPR:%.+]] = call i1 @__kmpc_kernel_parallel(i8** [[OMP_WORK_FN]])
 // CHECK: [[KPRB:%.+]] = zext i1 [[KPR]] to i8
 // store i8 [[KPRB]], i8* [[OMP_EXEC_STATUS]], align 1
@@ -318,13 +318,17 @@ int bar(int n){
 // CHECK: [[EXIT]]
 // CHECK: ret void
 
-// CHECK: define internal void [[PARALLEL_FN4]](
+// CHECK: noinline
+// CHECK-NEXT: define internal void [[PARALLEL_FN4]](
 // CHECK: [[A:%.+]] = alloca i[[SZ:32|64]],
 // CHECK: store i[[SZ]] 45, i[[SZ]]* %a,
-// CHECK: call void @__kmpc_barrier(%struct.ident_t* @{{.+}}, i32 %{{.+}}) #[[#CONVERGENT:]]
+// CHECK: call void @__kmpc_barrier(%struct.ident_t* @{{.+}}, i32 %{{.+}})
 // CHECK: ret void
 
-// CHECK: declare void @__kmpc_barrier(%struct.ident_t*, i32) #[[#CONVERGENT]]
+// CHECK: declare void @__kmpc_barrier(%struct.ident_t*, i32) #[[#CONVERGENT:]]
+
+// CHECK: Function Attrs: convergent noinline norecurse nounwind
+// CHECK-NEXT: [[PARALLEL_FN4]]_wrapper
 
 // CHECK-LABEL: define {{.*}}void {{@__omp_offloading_.+template.+l58}}_worker()
 // CHECK-LABEL: define {{.*}}void {{@__omp_offloading_.+template.+l58}}(
@@ -373,10 +377,9 @@ int bar(int n){
 // CHECK:  store i32 [[NEW_CC_VAL]], i32* [[CC]],
 // CHECK:  br label
 
-
 // CHECK: declare i32 @__kmpc_warp_active_thread_mask() #[[#CONVERGENT:]]
 // CHECK: declare void @__kmpc_syncwarp(i32) #[[#CONVERGENT:]]
 
-// CHECK: attributes #[[#CONVERGENT]] = {{.*}} convergent {{.*}}
+// CHECK: attributes #[[#CONVERGENT:]] = {{.*}} convergent {{.*}}
 
 #endif

@@ -134,17 +134,18 @@ bool BranchFolderPass::runOnMachineFunction(MachineFunction &MF) {
                                  MF.getSubtarget().getRegisterInfo());
 }
 
-BranchFolder::BranchFolder(bool defaultEnableTailMerge, bool CommonHoist,
+BranchFolder::BranchFolder(bool DefaultEnableTailMerge, bool CommonHoist,
                            MBFIWrapper &FreqInfo,
                            const MachineBranchProbabilityInfo &ProbInfo,
-                           ProfileSummaryInfo *PSI,
-                           unsigned MinTailLength)
+                           ProfileSummaryInfo *PSI, unsigned MinTailLength)
     : EnableHoistCommonCode(CommonHoist), MinCommonTailLength(MinTailLength),
       MBBFreqInfo(FreqInfo), MBPI(ProbInfo), PSI(PSI) {
   if (MinCommonTailLength == 0)
     MinCommonTailLength = TailMergeSize;
   switch (FlagEnableTailMerge) {
-  case cl::BOU_UNSET: EnableTailMerge = defaultEnableTailMerge; break;
+  case cl::BOU_UNSET:
+    EnableTailMerge = DefaultEnableTailMerge;
+    break;
   case cl::BOU_TRUE: EnableTailMerge = true; break;
   case cl::BOU_FALSE: EnableTailMerge = false; break;
   }
@@ -163,10 +164,10 @@ void BranchFolder::RemoveDeadBlock(MachineBasicBlock *MBB) {
   TriedMerging.erase(MBB);
 
   // Update call site info.
-  std::for_each(MBB->begin(), MBB->end(), [MF](const MachineInstr &MI) {
+  for (const MachineInstr &MI : *MBB)
     if (MI.shouldUpdateCallSiteInfo())
       MF->eraseCallSiteInfo(&MI);
-  });
+
   // Remove the block.
   MF->erase(MBB);
   EHScopeMembership.erase(MBB);
@@ -1216,7 +1217,7 @@ bool BranchFolder::OptimizeBranches(MachineFunction &MF) {
 // Blocks should be considered empty if they contain only debug info;
 // else the debug info would affect codegen.
 static bool IsEmptyBlock(MachineBasicBlock *MBB) {
-  return MBB->getFirstNonDebugInstr() == MBB->end();
+  return MBB->getFirstNonDebugInstr(true) == MBB->end();
 }
 
 // Blocks with only debug info and branches should be considered the same
@@ -1306,6 +1307,16 @@ static void salvageDebugInfoFromEmptyBlock(const TargetInstrInfo *TII,
   for (MachineBasicBlock *PredBB : MBB.predecessors())
     if (PredBB->succ_size() == 1)
       copyDebugInfoToPredecessor(TII, MBB, *PredBB);
+
+  // For AutoFDO, if the block is removed, we won't be able to sample it. To
+  // avoid assigning a zero weight for BB, move all its pseudo probes into once
+  // of its predecessors or successors and mark them dangling. This should allow
+  // the counts inference a chance to get a more reasonable weight for the
+  // block.
+  if (!MBB.pred_empty())
+    MBB.moveAndDanglePseudoProbes(*MBB.pred_begin());
+  else if (!MBB.succ_empty())
+    MBB.moveAndDanglePseudoProbes(*MBB.succ_begin());
 }
 
 bool BranchFolder::OptimizeBlock(MachineBasicBlock *MBB) {
@@ -1402,7 +1413,7 @@ ReoptimizeBlock:
       LLVM_DEBUG(dbgs() << "\nMerging into block: " << PrevBB
                         << "From MBB: " << *MBB);
       // Remove redundant DBG_VALUEs first.
-      if (PrevBB.begin() != PrevBB.end()) {
+      if (!PrevBB.empty()) {
         MachineBasicBlock::iterator PrevBBIter = PrevBB.end();
         --PrevBBIter;
         MachineBasicBlock::iterator MBBIter = MBB->begin();

@@ -22,11 +22,11 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
 
+class AAResults;
 class AssumptionCache;
 class BasicBlock;
 class CmpInst;
@@ -34,6 +34,7 @@ class DataLayout;
 class DemandedBits;
 class DominatorTree;
 class Function;
+class GetElementPtrInst;
 class InsertElementInst;
 class InsertValueInst;
 class Instruction;
@@ -63,7 +64,7 @@ struct SLPVectorizerPass : public PassInfoMixin<SLPVectorizerPass> {
   ScalarEvolution *SE = nullptr;
   TargetTransformInfo *TTI = nullptr;
   TargetLibraryInfo *TLI = nullptr;
-  AliasAnalysis *AA = nullptr;
+  AAResults *AA = nullptr;
   LoopInfo *LI = nullptr;
   DominatorTree *DT = nullptr;
   AssumptionCache *AC = nullptr;
@@ -75,7 +76,7 @@ public:
 
   // Glue for old PM.
   bool runImpl(Function &F, ScalarEvolution *SE_, TargetTransformInfo *TTI_,
-               TargetLibraryInfo *TLI_, AliasAnalysis *AA_, LoopInfo *LI_,
+               TargetLibraryInfo *TLI_, AAResults *AA_, LoopInfo *LI_,
                DominatorTree *DT_, AssumptionCache *AC_, DemandedBits *DB_,
                OptimizationRemarkEmitter *ORE_);
 
@@ -127,13 +128,11 @@ private:
   bool vectorizeInsertElementInst(InsertElementInst *IEI, BasicBlock *BB,
                                   slpvectorizer::BoUpSLP &R);
 
-  /// Try to vectorize trees that start at compare instructions.
-  bool vectorizeCmpInst(CmpInst *CI, BasicBlock *BB, slpvectorizer::BoUpSLP &R);
-
   /// Tries to vectorize constructs started from CmpInst, InsertValueInst or
   /// InsertElementInst instructions.
   bool vectorizeSimpleInstructions(SmallVectorImpl<Instruction *> &Instructions,
-                                   BasicBlock *BB, slpvectorizer::BoUpSLP &R);
+                                   BasicBlock *BB, slpvectorizer::BoUpSLP &R,
+                                   bool AtTerminator);
 
   /// Scan the basic block and look for patterns that are likely to start
   /// a vectorization chain.

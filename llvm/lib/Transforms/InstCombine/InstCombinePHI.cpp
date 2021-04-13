@@ -34,6 +34,7 @@ STATISTIC(NumPHIsOfInsertValues,
           "Number of phi-of-insertvalue turned into insertvalue-of-phis");
 STATISTIC(NumPHIsOfExtractValues,
           "Number of phi-of-extractvalue turned into extractvalue-of-phi");
+STATISTIC(NumPHICSEs, "Number of PHI's that got CSE'd");
 
 /// The PHI arguments will be folded into a single operation with a PHI node
 /// as input. The debug location of the single operation will be the merged
@@ -591,8 +592,14 @@ static bool isSafeAndProfitableToSinkLoad(LoadInst *L) {
   BasicBlock::iterator BBI = L->getIterator(), E = L->getParent()->end();
 
   for (++BBI; BBI != E; ++BBI)
-    if (BBI->mayWriteToMemory())
+    if (BBI->mayWriteToMemory()) {
+      // Calls that only access inaccessible memory do not block sinking the
+      // load.
+      if (auto *CB = dyn_cast<CallBase>(BBI))
+        if (CB->onlyAccessesInaccessibleMemory())
+          continue;
       return false;
+    }
 
   // Check for non-address taken alloca.  If not address-taken already, it isn't
   // profitable to do this xform.
@@ -1012,7 +1019,7 @@ struct LoweredPHIRecord {
   LoweredPHIRecord(PHINode *pn, unsigned Sh)
     : PN(pn), Shift(Sh), Width(0) {}
 };
-}
+} // namespace
 
 namespace llvm {
   template<>
@@ -1033,7 +1040,7 @@ namespace llvm {
              LHS.Width == RHS.Width;
     }
   };
-}
+} // namespace llvm
 
 
 /// This is an integer PHI and we know that it has an illegal type: see if it is
@@ -1309,6 +1316,24 @@ Instruction *InstCombinerImpl::visitPHINode(PHINode &PN) {
     if (Instruction *Result = foldPHIArgOpIntoPHI(PN))
       return Result;
 
+  // If the incoming values are pointer casts of the same original value,
+  // replace the phi with a single cast.
+  if (PN.getType()->isPointerTy()) {
+    Value *IV0 = PN.getIncomingValue(0);
+    Value *IV0Stripped = IV0->stripPointerCasts();
+    // Set to keep track of values known to be equal to IV0Stripped after
+    // stripping pointer casts.
+    SmallPtrSet<Value *, 4> CheckedIVs;
+    CheckedIVs.insert(IV0);
+    if (IV0 != IV0Stripped &&
+        all_of(PN.incoming_values(), [&CheckedIVs, IV0Stripped](Value *IV) {
+          return !CheckedIVs.insert(IV).second ||
+                 IV0Stripped == IV->stripPointerCasts();
+        })) {
+      return CastInst::CreatePointerCast(IV0Stripped, PN.getType());
+    }
+  }
+
   // If this is a trivial cycle in the PHI node graph, remove it.  Basically, if
   // this PHI only has a single use (a PHI), and if that PHI only has one use (a
   // PHI)... break the cycle.
@@ -1425,6 +1450,21 @@ Instruction *InstCombinerImpl::visitPHINode(PHINode &PN) {
         // this in this case.
       }
     }
+
+  // Is there an identical PHI node in this basic block?
+  for (PHINode &IdenticalPN : PN.getParent()->phis()) {
+    // Ignore the PHI node itself.
+    if (&IdenticalPN == &PN)
+      continue;
+    // Note that even though we've just canonicalized this PHI, due to the
+    // worklist visitation order, there are no guarantess that *every* PHI
+    // has been canonicalized, so we can't just compare operands ranges.
+    if (!PN.isIdenticalToWhenDefined(&IdenticalPN))
+      continue;
+    // Just use that PHI instead then.
+    ++NumPHICSEs;
+    return replaceInstUsesWith(PN, &IdenticalPN);
+  }
 
   // If this is an integer PHI and we know that it has an illegal type, see if
   // it is only used by trunc or trunc(lshr) operations.  If so, we split the

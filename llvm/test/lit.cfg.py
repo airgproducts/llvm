@@ -124,6 +124,12 @@ if config.have_ocamlopt:
 
 opt_viewer_cmd = '%s %s/tools/opt-viewer/opt-viewer.py' % (sys.executable, config.llvm_src_root)
 
+llvm_original_di_preservation_cmd = os.path.join(
+    config.llvm_src_root,'utils', 'llvm-original-di-preservation.py')
+config.substitutions.append(
+    ('%llvm-original-di-preservation', "'%s' %s" % (
+        config.python_executable, llvm_original_di_preservation_cmd)))
+
 llvm_locstats_tool = os.path.join(config.llvm_tools_dir, 'llvm-locstats')
 config.substitutions.append(
     ('%llvm-locstats', "'%s' %s" % (config.python_executable, llvm_locstats_tool)))
@@ -141,15 +147,17 @@ tools = [
     ToolSubst('%llvm-objcopy', FindTool('llvm-objcopy')),
     ToolSubst('%llvm-strip', FindTool('llvm-strip')),
     ToolSubst('%llvm-install-name-tool', FindTool('llvm-install-name-tool')),
+    ToolSubst('%llvm-bitcode-strip', FindTool('llvm-bitcode-strip')),
     ToolSubst('%split-file', FindTool('split-file')),
 ]
 
 # FIXME: Why do we have both `lli` and `%lli` that do slightly different things?
 tools.extend([
     'dsymutil', 'lli', 'lli-child-target', 'llvm-ar', 'llvm-as',
-    'llvm-addr2line', 'llvm-bcanalyzer', 'llvm-config', 'llvm-cov',
-    'llvm-cxxdump', 'llvm-cvtres', 'llvm-diff', 'llvm-dis', 'llvm-dwarfdump',
-    'llvm-exegesis', 'llvm-extract', 'llvm-isel-fuzzer', 'llvm-ifs',
+    'llvm-addr2line', 'llvm-bcanalyzer', 'llvm-bitcode-strip', 'llvm-config',
+    'llvm-cov', 'llvm-cxxdump', 'llvm-cvtres', 'llvm-diff', 'llvm-dis',
+    'llvm-dwarfdump', 'llvm-dlltool', 'llvm-exegesis', 'llvm-extract',
+    'llvm-isel-fuzzer', 'llvm-ifs',
     'llvm-install-name-tool', 'llvm-jitlink', 'llvm-opt-fuzzer', 'llvm-lib',
     'llvm-link', 'llvm-lto', 'llvm-lto2', 'llvm-mc', 'llvm-mca',
     'llvm-modextract', 'llvm-nm', 'llvm-objcopy', 'llvm-objdump',
@@ -330,7 +338,8 @@ if have_ld64_plugin_support():
 
 # Ask llvm-config about asserts
 llvm_config.feature_config(
-    [('--assertion-mode', {'ON': 'asserts'})])
+    [('--assertion-mode', {'ON': 'asserts'}),
+     ('--build-mode', {'[Dd][Ee][Bb][Uu][Gg]': 'debug'})])
 
 if 'darwin' == sys.platform:
     cmd = ['sysctl', 'hw.optional.fma']
@@ -356,8 +365,11 @@ if config.have_libxar:
 if config.enable_threads:
     config.available_features.add('thread_support')
 
-if config.llvm_libxml2_enabled:
+if config.have_libxml2:
     config.available_features.add('libxml2')
 
 if config.have_opt_viewer_modules:
     config.available_features.add('have_opt_viewer_modules')
+
+if config.expensive_checks:
+    config.available_features.add('expensive_checks')

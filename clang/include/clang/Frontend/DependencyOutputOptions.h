@@ -20,6 +20,14 @@ enum class ShowIncludesDestination { None, Stdout, Stderr };
 /// DependencyOutputFormat - Format for the compiler dependency file.
 enum class DependencyOutputFormat { Make, NMake };
 
+/// ExtraDepKind - The kind of extra dependency file.
+enum ExtraDepKind {
+  EDK_SanitizeBlacklist,
+  EDK_ProfileList,
+  EDK_ModuleFile,
+  EDK_DepFileEntry,
+};
+
 /// DependencyOutputOptions - Options for controlling the compiler dependency
 /// file generation.
 class DependencyOutputOptions {
@@ -41,10 +49,6 @@ public:
   /// The file to write dependency output to.
   std::string OutputFile;
 
-  /// Dependency output which is prefixed with this string is filtered
-  /// from the dependency output.
-  std::string DependencyFilter;
-
   /// The file to write header include output to. This is orthogonal to
   /// ShowHeaderIncludes (-H) and will include headers mentioned in the
   /// predefines buffer. If the output file is "-", output will be sent to
@@ -55,8 +59,9 @@ public:
   /// must contain at least one entry.
   std::vector<std::string> Targets;
 
-  /// A list of filenames to be used as extra dependencies for every target.
-  std::vector<std::string> ExtraDeps;
+  /// A list of extra dependencies (filename and kind) to be used for every
+  /// target.
+  std::vector<std::pair<std::string, ExtraDepKind>> ExtraDeps;
 
   /// In /showIncludes mode, pretend the main TU is a header with this name.
   std::string ShowIncludesPretendHeader;
@@ -66,6 +71,10 @@ public:
 
   /// The directory to copy module dependencies to when collecting them.
   std::string ModuleDependencyOutputDir;
+
+  /// Dependency output which is prefixed with this string is filtered from
+  /// the dependency output. 
+  std::string DependencyFilter;
 
 public:
   DependencyOutputOptions()

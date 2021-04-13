@@ -39,6 +39,7 @@
 #include "SPIRVWriter.h"
 
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 
 using namespace SPIRV;
 
@@ -100,7 +101,7 @@ void LLVMToSPIRVDbgTran::finalizeDebugDeclare(
     return;
   SPIRVExtInst *DD = static_cast<SPIRVExtInst *>(V);
   SPIRVBasicBlock *BB = DD->getBasicBlock();
-  llvm::Value *Alloca = DbgDecl->getVariableLocation();
+  llvm::Value *Alloca = DbgDecl->getVariableLocationOp(0);
 
   using namespace SPIRVDebug::Operand::DebugDeclare;
   SPIRVWordVec Ops(OperandCount);
@@ -115,7 +116,7 @@ void LLVMToSPIRVDbgTran::finalizeDebugDeclare(
 
 SPIRVValue *LLVMToSPIRVDbgTran::createDebugValuePlaceholder(
     const DbgVariableIntrinsic *DbgValue, SPIRVBasicBlock *BB) {
-  if (!DbgValue->getVariableLocation(/* AllowNullOp = */ false))
+  if (!DbgValue->getVariableLocationOp(0))
     return nullptr; // It is pointless without new value
 
   DbgValueIntrinsics.push_back(DbgValue);
@@ -135,7 +136,7 @@ void LLVMToSPIRVDbgTran::finalizeDebugValue(
     return;
   SPIRVExtInst *DV = static_cast<SPIRVExtInst *>(V);
   SPIRVBasicBlock *BB = DV->getBasicBlock();
-  Value *Val = DbgValue->getVariableLocation(/* AllowNullOp = */ false);
+  Value *Val = DbgValue->getVariableLocationOp(0);
 
   using namespace SPIRVDebug::Operand::DebugValue;
   SPIRVWordVec Ops(MinOperandCount);
@@ -436,6 +437,21 @@ SPIRVWord transDebugFlags(const DINode *DN) {
   return Flags;
 }
 
+/// Clang doesn't emit access flags for members with default access specifier
+/// See clang/lib/CodeGen/CGDebugInfo.cpp: getAccessFlag()
+/// In SPIR-V we set the flags even for members with default access specifier
+SPIRVWord adjustAccessFlags(DIScope *Scope, SPIRVWord Flags) {
+  if (Scope && (Flags & SPIRVDebug::FlagAccess) == 0) {
+    unsigned Tag = Scope->getTag();
+    if (Tag == dwarf::DW_TAG_class_type)
+      Flags |= SPIRVDebug::FlagIsPrivate;
+    else if (Tag == dwarf::DW_TAG_structure_type ||
+             Tag == dwarf::DW_TAG_union_type)
+      Flags |= SPIRVDebug::FlagIsPublic;
+  }
+  return Flags;
+}
+
 /// The following methods (till the end of the file) implement translation of
 /// debug instrtuctions described in the spec.
 
@@ -665,7 +681,7 @@ SPIRVEntry *LLVMToSPIRVDbgTran::transDbgMemberType(const DIDerivedType *MT) {
   Ops[OffsetIdx] = SPIRVWriter->transValue(Offset, nullptr)->getId();
   ConstantInt *Size = getUInt(M, MT->getSizeInBits());
   Ops[SizeIdx] = SPIRVWriter->transValue(Size, nullptr)->getId();
-  Ops[FlagsIdx] = transDebugFlags(MT);
+  Ops[FlagsIdx] = adjustAccessFlags(MT->getScope(), transDebugFlags(MT));
   if (MT->isStaticMember()) {
     if (llvm::Constant *C = MT->getConstant()) {
       SPIRVValue *Val = SPIRVWriter->transValue(C, nullptr);
@@ -815,7 +831,7 @@ SPIRVEntry *LLVMToSPIRVDbgTran::transDbgFunction(const DISubprogram *Func) {
   else
     Ops[ParentIdx] = getScope(Scope)->getId();
   Ops[LinkageNameIdx] = BM->getString(Func->getLinkageName().str())->getId();
-  Ops[FlagsIdx] = transDebugFlags(Func);
+  Ops[FlagsIdx] = adjustAccessFlags(Scope, transDebugFlags(Func));
 
   SPIRVEntry *DebugFunc = nullptr;
   if (!Func->isDefinition()) {
@@ -922,7 +938,15 @@ SPIRVExtInst *LLVMToSPIRVDbgTran::getSource(const T *DIEntry) {
   using namespace SPIRVDebug::Operand::Source;
   SPIRVWordVec Ops(OperandCount);
   Ops[FileIdx] = BM->getString(FileName)->getId();
-  Ops[TextIdx] = getDebugInfoNone()->getId();
+  DIFile *F = DIEntry ? DIEntry->getFile() : nullptr;
+  if (F && F->getRawChecksum()) {
+    const auto &CheckSum = F->getChecksum().getValue();
+    Ops[TextIdx] = BM->getString("//__" + CheckSum.getKindAsString().str() +
+                                 ":" + CheckSum.Value.str())
+                       ->getId();
+  } else {
+    Ops[TextIdx] = getDebugInfoNone()->getId();
+  }
   SPIRVExtInst *Source = static_cast<SPIRVExtInst *>(
       BM->addDebugInfo(SPIRVDebug::Source, getVoidTy(), Ops));
   FileMap[FileName] = Source;
@@ -959,10 +983,14 @@ SPIRVEntry *LLVMToSPIRVDbgTran::transDbgExpression(const DIExpression *Expr) {
   for (unsigned I = 0, N = Expr->getNumElements(); I < N; ++I) {
     using namespace SPIRVDebug::Operand::Operation;
     auto DWARFOpCode = static_cast<dwarf::LocationAtom>(Expr->getElement(I));
+
     SPIRVDebug::ExpressionOpCode OC =
         SPIRV::DbgExpressionOpCodeMap::map(DWARFOpCode);
-    assert(OpCountMap.find(OC) != OpCountMap.end() &&
-           "unhandled opcode found in DIExpression");
+    if (OpCountMap.find(OC) == OpCountMap.end())
+      report_fatal_error("unknown opcode found in DIExpression");
+    if (OC > SPIRVDebug::Fragment && !BM->allowExtraDIExpressions())
+      report_fatal_error("unsupported opcode found in DIExpression");
+
     unsigned OpCount = OpCountMap[OC];
     SPIRVWordVec Op(OpCount);
     Op[OpCodeIdx] = OC;
