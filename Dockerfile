@@ -1,23 +1,21 @@
-from fedora:latest as base
+# https://hub.docker.com/r/nvidia/cuda
+# nvidia/cuda:latest-devel -> latest-compiler
+# nvidia/cuda:latest-runtime -> latest-runtime
+from nvidia/cuda:10.1-devel-centos8 as compilerbase
 
-RUN dnf -y groupinstall "Development Tools"
-RUN dnf -y install python cmake ninja-build gcc-c++
-
-# Install cuda
-
-# install config-manager
 RUN dnf -y install dnf-plugins-core
-RUN dnf -y config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/fedora33/x86_64/cuda-fedora33.repo
-RUN dnf -y clean all
-#RUN dnf -y module disable nvidia-driver
-RUN dnf -y install cuda
+RUN dnf config-manager --set-enabled powertools
+RUN dnf -y groupinstall "Development Tools"
+RUN dnf -y install python3 cmake ninja-build
+ENV DPCPP_PKG /root/llvm_pkg
 
+# build llvm
+from compilerbase as buildstep
 
-from base as builder
+RUN dnf -y install gcc-c++
 
 ENV DPCPP_BUILD /root/llvm
 ENV DPCPP_SRC /root/llvm_src
-ENV DPCPP_PKG /root/llvm_pkg
 
 ADD . $DPCPP_SRC
 RUN mkdir -p $DPCPP_BUILD
@@ -29,10 +27,20 @@ RUN python $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 WORKDIR $DPCPP_BUILD
 RUN cmake --build . --target install
 RUN cmake -DCMAKE_INSTALL_PREFIX=$DPCPP_PKG -P cmake_install.cmake
+RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
 
 RUN rm -rf $DPCPP_SRC
 RUN rm -rf $DPCPP_BUILD
 
-from base
 
-COPY --from=builder /root/llvm_pkg/ /
+# install llvm
+from compilerbase as compiler
+
+COPY --from=builder /root/llvm.tar /tmp/llvm.tar
+RUN tar -xf /tmp/llvm.tar -C / && rm /root/llvm.tar
+
+
+# install llvm libs
+from nvidia/cuda:10.1-runtime-centos8 as runtime
+
+COPY --from=builder /root/llvm_pkg/lib /lib
