@@ -21,8 +21,8 @@ ADD . $DPCPP_SRC
 RUN mkdir -p $DPCPP_BUILD
 RUN mkdir -p $DPCPP_PKG
 
-RUN python $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t release --cuda
-RUN python $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
+RUN python3 $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t release --cuda
+RUN python3 $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
 WORKDIR $DPCPP_BUILD
 RUN cmake --build . --target install
