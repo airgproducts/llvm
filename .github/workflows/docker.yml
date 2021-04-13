@@ -7,6 +7,8 @@ on:
 
 jobs:
   docker:
+    strategy:
+      max-parallel: 4
     runs-on: ubuntu-latest
     steps:      
       - name: Create more disk space
@@ -24,7 +26,7 @@ jobs:
       -
         name: Build and push
         id: docker_build
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v1
         with:
           push: true
           tags: ghcr.io/airgproducts/llvm:latest
