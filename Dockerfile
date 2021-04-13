@@ -1,7 +1,7 @@
 # https://hub.docker.com/r/nvidia/cuda
 # nvidia/cuda:latest-devel -> latest-compiler
 # nvidia/cuda:latest-runtime -> latest-runtime
-from nvidia/cuda:10.1-devel-centos8 as compilerbase
+FROM nvidia/cuda:10.1-devel-centos8 AS compilerbase
 
 RUN dnf -y install dnf-plugins-core
 RUN dnf config-manager --set-enabled powertools
@@ -10,7 +10,7 @@ RUN dnf -y install python3 cmake ninja-build
 ENV DPCPP_PKG /root/llvm_pkg
 
 # build llvm
-from compilerbase as buildstep
+FROM compilerbase AS buildstep
 
 RUN dnf -y install gcc-c++
 
@@ -34,13 +34,13 @@ RUN rm -rf $DPCPP_BUILD
 
 
 # install llvm
-from compilerbase as compiler
+FROM compilerbase AS compiler
 
 COPY --from=builder /root/llvm.tar /tmp/llvm.tar
 RUN tar -xf /tmp/llvm.tar -C / && rm /root/llvm.tar
 
 
 # install llvm libs
-from nvidia/cuda:10.1-runtime-centos8 as runtime
+FROM nvidia/cuda:10.1-runtime-centos8 AS runtime
 
 COPY --from=builder /root/llvm_pkg/lib /lib
