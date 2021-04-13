@@ -24,6 +24,7 @@ namespace {
 // Please update SDLMap if any item is added to or removed from
 // fallback device libraries in libdevice.
 SYCLDeviceLibFuncMap SDLMap = {
+    {"__devicelib_abs", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_acosf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_acoshf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_asinf", DeviceLibExt::cl_intel_devicelib_math},
@@ -34,6 +35,7 @@ SYCLDeviceLibFuncMap SDLMap = {
     {"__devicelib_cbrtf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_cosf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_coshf", DeviceLibExt::cl_intel_devicelib_math},
+    {"__devicelib_div", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_erfcf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_erff", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_exp2f", DeviceLibExt::cl_intel_devicelib_math},
@@ -45,8 +47,12 @@ SYCLDeviceLibFuncMap SDLMap = {
     {"__devicelib_frexpf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_hypotf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_ilogbf", DeviceLibExt::cl_intel_devicelib_math},
+    {"__devicelib_labs", DeviceLibExt::cl_intel_devicelib_math},
+    {"__devicelib_ldiv", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_ldexpf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_lgammaf", DeviceLibExt::cl_intel_devicelib_math},
+    {"__devicelib_llabs", DeviceLibExt::cl_intel_devicelib_math},
+    {"__devicelib_lldiv", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_log10f", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_log1pf", DeviceLibExt::cl_intel_devicelib_math},
     {"__devicelib_log2f", DeviceLibExt::cl_intel_devicelib_math},

@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 %s -fsyntax-only -ast-dump -fsycl -fsycl-is-device -triple spir64 -Wno-sycl-2017-compat -verify | FileCheck %s
+// RUN: %clang_cc1 %s -fsyntax-only -ast-dump -fsycl-is-device -triple spir64 -Wno-sycl-2017-compat -verify | FileCheck %s
 
 #include "Inputs/sycl.hpp"
 // expected-warning@+2 {{attribute 'intelfpga::scheduler_target_fmax_mhz' is deprecated}}
@@ -6,9 +6,11 @@
 [[intelfpga::scheduler_target_fmax_mhz(2)]] void
 func() {}
 
+// No diagnostic is emitted because the arguments match.
 [[intel::scheduler_target_fmax_mhz(12)]] void bar();
 [[intel::scheduler_target_fmax_mhz(12)]] void bar() {} // OK
 
+// Diagnostic is emitted because the arguments mismatch.
 [[intel::scheduler_target_fmax_mhz(12)]] void baz();  // expected-note {{previous attribute is here}}
 [[intel::scheduler_target_fmax_mhz(100)]] void baz(); // expected-warning {{attribute 'scheduler_target_fmax_mhz' is already applied with different arguments}}
 

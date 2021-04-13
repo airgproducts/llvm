@@ -37,6 +37,7 @@
 #include "llvm/Support/SystemUtils.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar.h"
@@ -412,16 +413,12 @@ static string_vector saveDeviceImageProperty(
     if (ImgPSInfo.DoSpecConst && ImgPSInfo.SetSpecConstAtRT) {
       if (ImgPSInfo.SpecConstsMet) {
         // extract spec constant maps per each module
-        ScalarSpecIDMapTy TmpScalarSpecIDMap;
-        CompositeSpecIDMapTy TmpCompositeSpecIDMap;
-        SpecConstantsPass::collectSpecConstantMetadata(
-            *ResultModules[I].get(), TmpScalarSpecIDMap, TmpCompositeSpecIDMap);
+        SpecIDMapTy TmpSpecIDMap;
+        SpecConstantsPass::collectSpecConstantMetadata(*ResultModules[I].get(),
+                                                       TmpSpecIDMap);
         PropSet.add(
             llvm::util::PropertySetRegistry::SYCL_SPECIALIZATION_CONSTANTS,
-            TmpScalarSpecIDMap);
-        PropSet.add(llvm::util::PropertySetRegistry::
-                        SYCL_COMPOSITE_SPECIALIZATION_CONSTANTS,
-                    TmpCompositeSpecIDMap);
+            TmpSpecIDMap);
       }
     }
     if (ImgPSInfo.EmitKernelParamInfo) {
@@ -489,30 +486,6 @@ static string_vector saveResultSymbolsLists(string_vector &ResSymbolsLists,
     }                                                                          \
   }
 
-// Helper function for creating Inliner pass.
-// The approach is taken from opt tool.
-static Pass *createFunctionInliningPassHelper() {
-  if (OptLevelO0)
-    return createFunctionInliningPass(0, 0, false);
-
-  if (OptLevelO1)
-    return createFunctionInliningPass(1, 0, false);
-
-  if (OptLevelO2)
-    return createFunctionInliningPass(2, 0, false);
-
-  if (OptLevelOs)
-    return createFunctionInliningPass(2, 1, false);
-
-  if (OptLevelOz)
-    return createFunctionInliningPass(2, 2, false);
-
-  if (OptLevelO3)
-    return createFunctionInliningPass(3, 0, false);
-
-  return createFunctionInliningPass();
-}
-
 // When ESIMD code was separated from the regular SYCL code,
 // we can safely process ESIMD part.
 // TODO: support options like -debug-pass, -print-[before|after], and others
@@ -520,9 +493,8 @@ static void LowerEsimdConstructs(Module &M) {
   legacy::PassManager MPM;
   MPM.add(createSYCLLowerESIMDPass());
   if (!OptLevelO0) {
-    // Inlining and SROA passes are required to make
-    // ESIMD/accessor_gather_scatter.cpp test work.
-    MPM.add(createFunctionInliningPassHelper());
+    // Force-inline all functions marked 'alwaysinline' by the LowerESIMD pass.
+    MPM.add(createAlwaysInlinerLegacyPass());
     MPM.add(createSROAPass());
   }
   MPM.add(createESIMDLowerVecArgPass());
@@ -532,7 +504,7 @@ static void LowerEsimdConstructs(Module &M) {
     MPM.add(createEarlyCSEPass(true));
     MPM.add(createInstructionCombiningPass());
     MPM.add(createDeadCodeEliminationPass());
-    MPM.add(createFunctionInliningPassHelper());
+    // TODO: maybe remove some passes below that don't affect code quality
     MPM.add(createSROAPass());
     MPM.add(createEarlyCSEPass(true));
     MPM.add(createInstructionCombiningPass());
