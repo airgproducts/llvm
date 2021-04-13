@@ -36,11 +36,11 @@ RUN rm -rf $DPCPP_BUILD
 # install llvm
 FROM compilerbase AS compiler
 
-COPY --from=builder /root/llvm.tar /tmp/llvm.tar
+COPY --from=buildstep /root/llvm.tar /tmp/llvm.tar
 RUN tar -xf /tmp/llvm.tar -C / && rm /root/llvm.tar
 
 
 # install llvm libs
 FROM nvidia/cuda:10.1-runtime-centos8 AS runtime
 
-COPY --from=builder /root/llvm_pkg/lib /lib
+COPY --from=buildstep /root/llvm_pkg/lib /lib
