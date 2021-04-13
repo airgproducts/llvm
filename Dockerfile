@@ -17,12 +17,12 @@ ENV DPCPP_BUILD /root/llvm
 ENV DPCPP_SRC /root/llvm_src
 RUN mkdir -p $DPCPP_BUILD
 RUN ls /root
-RUN python $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t release --cuda
-RUN python $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
+#RUN python $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t release --cuda
+#RUN python $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
-WORKDIR $DPCPP_BUILD
-RUN cmake --build . --target install
-RUN cmake -DCMAKE_INSTALL_PREFIX=/ -P cmake_install.cmake
+#WORKDIR $DPCPP_BUILD
+#RUN cmake --build . --target install
+#RUN cmake -DCMAKE_INSTALL_PREFIX=/ -P cmake_install.cmake
 
 RUN rm -rf $DPCPP_SRC
 RUN rm -rf $DPCPP_BUILD
