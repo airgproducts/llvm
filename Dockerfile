@@ -1,12 +1,23 @@
 # https://hub.docker.com/r/nvidia/cuda
 # nvidia/cuda:latest-devel -> latest-compiler
 # nvidia/cuda:latest-runtime -> latest-runtime
-FROM nvidia/cuda:10.1-devel-centos8 AS compilerbase
+from fedora:latest as base
 
+ENV CV=11-2
+
+RUN dnf -y update
 RUN dnf -y install dnf-plugins-core
-RUN dnf config-manager --set-enabled powertools
+RUN dnf -y config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/fedora33/x86_64/cuda-fedora33.repo
+RUN dnf -y clean all
+
+RUN dnf -y install cuda-runtime-$CV cuda-compat-$CV cuda-libraries-$CV cuda-nvtx-$CV libcublas-$CV
+
+
+from base as compilerbase
+
+RUN dnf -y install cuda
 RUN dnf -y groupinstall "Development Tools"
-RUN dnf -y install python3 cmake ninja-build
+RUN dnf -y install python cmake ninja-build
 ENV DPCPP_PKG /root/llvm_pkg
 
 # build llvm
@@ -41,6 +52,6 @@ RUN tar -xf /tmp/llvm.tar -C / && rm /root/llvm.tar
 
 
 # install llvm libs
-FROM nvidia/cuda:10.1-runtime-centos8 AS runtime
+FROM base AS runtime
 
 COPY --from=buildstep /root/llvm_pkg/lib /lib
