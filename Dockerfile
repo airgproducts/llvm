@@ -48,7 +48,7 @@ RUN rm -rf $DPCPP_BUILD
 FROM compilerbase AS compiler
 
 COPY --from=buildstep /root/llvm.tar /tmp/llvm.tar
-RUN tar -xf /tmp/llvm.tar -C / && rm /root/llvm.tar
+RUN tar -xf /tmp/llvm.tar -C / && rm /tmp/llvm.tar
 
 
 # install llvm libs
