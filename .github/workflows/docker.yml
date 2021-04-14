@@ -25,12 +25,21 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       -
-        name: Build and push
+        name: Build and push compiler
         id: docker_build
         uses: docker/build-push-action@v2
         with:
           push: true
-          tags: ghcr.io/airgproducts/llvm:latest
+          target: compiler
+          tags: ghcr.io/airgproducts/llvm-compiler:latest
+      -
+        name: Build and push runtime
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          push: true
+          target: runtime
+          tags: ghcr.io/airgproducts/llvm-compiler:latest
       -
         name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
