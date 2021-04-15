@@ -30,14 +30,17 @@ ENV DPCPP_SRC /root/llvm_src
 
 ADD . $DPCPP_SRC
 RUN mkdir -p $DPCPP_BUILD
-RUN mkdir -p $DPCPP_PKG
+
+# install to /usr
+RUN mkdir -p $DPCPP_PKG/usr
 
 RUN python3 $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t release --cuda
 RUN python3 $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
 WORKDIR $DPCPP_BUILD
 RUN cmake --build . --target install
-RUN cmake -DCMAKE_INSTALL_PREFIX=$DPCPP_PKG -P cmake_install.cmake
+RUN cmake -DCMAKE_INSTALL_PREFIX=$DPCPP_PKG/usr -P cmake_install.cmake
+
 RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
 
 RUN rm -rf $DPCPP_SRC
