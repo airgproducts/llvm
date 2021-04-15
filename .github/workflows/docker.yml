@@ -39,7 +39,7 @@ jobs:
         with:
           push: true
           target: runtime
-          tags: ghcr.io/airgproducts/llvm-compiler:latest
+          tags: ghcr.io/airgproducts/llvm-runtime:latest
       -
         name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
