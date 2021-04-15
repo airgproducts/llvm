@@ -57,4 +57,4 @@ RUN tar -xf /root/llvm.tar -C / && rm /root/llvm.tar
 # install llvm libs
 FROM base AS runtime
 
-COPY --from=buildstep /root/llvm_pkg/lib /lib
+COPY --from=buildstep /root/llvm_pkg/usr/lib /lib
