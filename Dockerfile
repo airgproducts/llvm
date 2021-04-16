@@ -39,9 +39,10 @@ RUN python3 $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
 WORKDIR $DPCPP_BUILD
 RUN cmake --build . --target install
-RUN cmake -DCMAKE_INSTALL_PREFIX=$DPCPP_PKG/usr -P cmake_install.cmake
+RUN cmake --build . --target install -DCMAKE_INSTALL_TARGET=sycl-headers
+RUN cmake --install . --prefix $DPCPP_PKG/usr
 
-RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
+#RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
 
 RUN rm -rf $DPCPP_SRC
 RUN rm -rf $DPCPP_BUILD
@@ -50,8 +51,10 @@ RUN rm -rf $DPCPP_BUILD
 # install llvm
 FROM compilerbase AS compiler
 
-COPY --from=buildstep /root/llvm.tar /root/llvm.tar
-RUN tar -xf /root/llvm.tar -C / && rm /root/llvm.tar
+ENV DPCPP_BUILD /root/llvm
+COPY --from=buildstep /root/llvm /root/llvm
+#COPY --from=buildstep /root/llvm.tar /root/llvm.tar
+#RUN tar -xf /root/llvm.tar -C / && rm /root/llvm.tar
 
 
 # install llvm libs
