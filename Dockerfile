@@ -60,4 +60,4 @@ COPY --from=buildstep /root/llvm /root/llvm
 # install llvm libs
 FROM base AS runtime
 
-COPY --from=buildstep /root/llvm_pkg/usr/lib /lib
+COPY --from=buildstep /root/llvm_pkg/usr/lib /usr/lib
