@@ -38,8 +38,7 @@ RUN python3 $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t rele
 RUN python3 $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
 WORKDIR $DPCPP_BUILD
-RUN cmake --build . --target install
-RUN cmake --build . --target install -DCMAKE_INSTALL_TARGET=sycl-headers
+RUN cmake --build . --target deploy-sycl-toolchain
 RUN cmake --install . --prefix $DPCPP_PKG/usr
 
 #RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
