@@ -19,25 +19,29 @@ jobs:
         uses: docker/setup-buildx-action@v1
         with:
           version: latest
-          buildkitd-flags: --debug
       - name: Login to ghcr
         uses: docker/login-action@v1 
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Build and push compiler
+      - name: Build compiler
         id: docker_build_compiler
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: false
+          target: compilerbase
+      - name: Build and push compiler
+        id: docker_push_compiler
         uses: docker/build-push-action@v2
         with:
           context: .
           push: true
           target: compiler
           tags: ghcr.io/airgproducts/llvm-compiler:latest
-      -
-        name: Build and push runtime
-        id: docker_build_runtime
+      - name: Build and push runtime
+        id: docker_push_runtime
         uses: docker/build-push-action@v2
         with:
           context: .
