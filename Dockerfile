@@ -1,7 +1,7 @@
 # https://hub.docker.com/r/nvidia/cuda
 # nvidia/cuda:latest-devel -> latest-compiler
 # nvidia/cuda:latest-runtime -> latest-runtime
-from fedora:latest as base
+FROM fedora:latest AS base
 
 ENV CV=11-2
 
@@ -13,7 +13,7 @@ RUN dnf -y clean all
 RUN dnf -y install cuda-runtime-$CV cuda-compat-$CV cuda-libraries-$CV cuda-nvtx-$CV libcublas-$CV
 
 
-from base as compilerbase
+FROM base AS compilerbase
 
 RUN dnf -y install cuda
 RUN dnf -y groupinstall "Development Tools"
@@ -39,24 +39,17 @@ RUN python3 $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
 WORKDIR $DPCPP_BUILD
 RUN cmake --build . --target deploy-sycl-toolchain
-RUN mkdir -p $DPCPP_PKG
-RUN mv $DPCPP_BUILD/install $DPCPP_PKG/usr
-
-RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
-
-RUN rm -rf $DPCPP_SRC
-RUN rm -rf $DPCPP_BUILD
 
 
 # install llvm
 FROM compilerbase AS compiler
 
-ENV DPCPP_BUILD /root/llvm
-COPY --from=buildstep /root/llvm.tar /root/llvm.tar
-RUN tar -xf /root/llvm.tar -C / && rm /root/llvm.tar
+COPY --from=buildstep /root/llvm/install/bin/* /usr/bin/
+COPY --from=buildstep /root/llvm/install/lib/* /usr/lib/
+COPY --from=buildstep /root/llvm/install/include/* /usr/include/
 
 
 # install llvm libs
 FROM base AS runtime
 
-COPY --from=buildstep /root/llvm_pkg/usr/lib /usr/lib
+COPY --from=buildstep /root/llvm/install/lib/* /usr/lib/
