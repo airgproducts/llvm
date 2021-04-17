@@ -25,18 +25,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build compiler
-        id: docker_build_compiler
-        uses: docker/build-push-action@v2
-        with:
-          context: .
-          push: false
-          target: buildstep
       - name: Build and push compiler
         id: docker_push_compiler
         uses: docker/build-push-action@v2
         with:
-          context: .
           push: true
           target: compiler
           tags: ghcr.io/airgproducts/llvm-compiler:latest
@@ -48,6 +40,5 @@ jobs:
           push: true
           target: runtime
           tags: ghcr.io/airgproducts/llvm-runtime:latest
-      -
-        name: Image digest
+      - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
