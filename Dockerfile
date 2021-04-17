@@ -37,15 +37,18 @@ RUN mkdir -p $DPCPP_PKG/usr
 RUN python3 $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t release --cuda
 RUN python3 $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
+RUN mv $DPCPP_BUILD/install $DPCPP_PKG/usr
+
+RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
 
 # install llvm
 FROM compilerbase AS compiler
 
-COPY --from=buildstep /root/llvm/install/bin/* /usr/bin/
-COPY --from=buildstep /root/llvm/install/lib/* /usr/lib/
-COPY --from=buildstep /root/llvm/install/include/* /usr/include/
+RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root
+RUN tar -C / -xf /root/build/llvm.tar
 
 # install llvm libs
 FROM base AS runtime
 
-COPY --from=buildstep /root/llvm/install/lib/* /usr/lib/
+RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root
+RUN tar -C / -xf /root/build/llvm.tar usr/lib
