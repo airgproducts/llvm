@@ -42,7 +42,7 @@ RUN cmake --build . --target deploy-sycl-toolchain
 RUN mkdir -p $DPCPP_PKG
 RUN mv $DPCPP_BUILD/install $DPCPP_PKG/usr
 
-#RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
+RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
 
 RUN rm -rf $DPCPP_SRC
 RUN rm -rf $DPCPP_BUILD
@@ -52,9 +52,8 @@ RUN rm -rf $DPCPP_BUILD
 FROM compilerbase AS compiler
 
 ENV DPCPP_BUILD /root/llvm
-COPY --from=buildstep /root/llvm /root/llvm
-#COPY --from=buildstep /root/llvm.tar /root/llvm.tar
-#RUN tar -xf /root/llvm.tar -C / && rm /root/llvm.tar
+COPY --from=buildstep /root/llvm.tar /root/llvm.tar
+RUN tar -xf /root/llvm.tar -C / && rm /root/llvm.tar
 
 
 # install llvm libs
