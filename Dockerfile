@@ -15,7 +15,7 @@ RUN dnf -y install cuda-runtime-$CV cuda-compat-$CV cuda-libraries-$CV cuda-nvtx
 
 FROM base AS compilerbase
 
-RUN echo "exclude=clang*" >> /etc/dnf/dnf.conf
+RUN echo "exclude=clang" >> /etc/dnf/dnf.conf
 
 RUN dnf -y install cuda
 RUN dnf -y groupinstall "Development Tools"
