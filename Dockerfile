@@ -16,7 +16,7 @@ RUN dnf -y install cuda-runtime-$CV cuda-compat-$CV cuda-libraries-$CV cuda-nvtx
 FROM base AS compilerbase
 
 RUN dnf -y install cuda
-RUN dnf -y groupinstall "Development Tools"
+RUN dnf -y groupinstall "Development Tools" --exclude=clang,clang-libs
 RUN dnf -y install python cmake ninja-build
 ENV DPCPP_PKG /root/llvm_pkg
 
