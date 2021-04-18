@@ -49,4 +49,4 @@ RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C / -x
 # install llvm libs
 FROM base AS runtime
 
-RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C / -xf /root/build/llvm.tar usr/lib
+RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C / -xf /root/build/llvm.tar ./usr/lib
