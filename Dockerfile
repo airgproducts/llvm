@@ -46,9 +46,9 @@ RUN tar -cf /root/llvm.tar -C $DPCPP_PKG .
 # install llvm
 FROM compilerbase AS compiler
 
-RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C / -xf /root/build/llvm.tar
+RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C / -xvf /root/build/llvm.tar
 
 # install llvm libs
 FROM base AS runtime
 
-RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C / -xf /root/build/llvm.tar ./usr/lib
+RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C / -xvf /root/build/llvm.tar ./usr/lib
