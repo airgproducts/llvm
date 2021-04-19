@@ -11,7 +11,7 @@ RUN dnf -y config-manager --add-repo https://developer.download.nvidia.com/compu
 RUN dnf -y clean all
 
 RUN dnf -y install cuda-runtime-$CV cuda-compat-$CV cuda-libraries-$CV cuda-nvtx-$CV libcublas-$CV
-
+RUN dnf install -y ocl-icd-devel
 
 FROM base AS compilerbase
 
@@ -21,6 +21,7 @@ RUN dnf -y install cuda
 RUN dnf -y groupinstall "Development Tools"
 RUN dnf -y install python cmake ninja-build
 ENV DPCPP_PKG /root/llvm_pkg
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/99local.conf
 
 # build llvm
 FROM compilerbase AS buildstep
@@ -36,7 +37,7 @@ RUN mkdir -p $DPCPP_BUILD
 # install to /usr
 RUN mkdir -p $DPCPP_PKG/usr
 
-RUN python3 $DPCPP_SRC/buildbot/configure.py --no-werror -o $DPCPP_BUILD -t release --cuda
+RUN python3 $DPCPP_SRC/buildbot/configure.py --no-werror --system-ocl -o $DPCPP_BUILD -t release --cuda
 RUN python3 $DPCPP_SRC/buildbot/compile.py -o $DPCPP_BUILD
 
 RUN tar -cf /root/llvm.tar -C $DPCPP_BUILD/install .
@@ -45,8 +46,10 @@ RUN tar -cf /root/llvm.tar -C $DPCPP_BUILD/install .
 FROM compilerbase AS compiler
 
 RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C /usr/local -xvf /root/build/llvm.tar
+RUN ldconfig
 
 # install llvm libs
 FROM base AS runtime
 
 RUN --mount=type=bind,from=buildstep,target=/root/build,source=/root tar -C /usr/local -xvf /root/build/llvm.tar ./lib
+RUN ldconfig
