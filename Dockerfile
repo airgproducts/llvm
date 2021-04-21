@@ -13,6 +13,12 @@ RUN dnf -y clean all
 RUN dnf -y install cuda-runtime-$CV cuda-compat-$CV cuda-libraries-$CV cuda-nvtx-$CV libcublas-$CV
 RUN dnf install -y ocl-icd-devel
 
+# https://forums.developer.nvidia.com/t/issues-running-deepstream-on-wsl2-docker-container-usr-lib-x86-64-linux-gnu-libcuda-so-1-file-exists-n-unknown/139700/3
+ENV LD_LIBRARY_PATH="/usr/lib:/usr/lib64:/usr/local/lib:/usr/local/lib64"
+RUN mv /usr/lib64/libcuda.so* /usr/local/lib64/
+RUN mv /usr/lib64/libnvidia-ml* /usr/local/lib64/
+RUN ldconfig
+
 FROM base AS compilerbase
 
 RUN echo "exclude=clang" >> /etc/dnf/dnf.conf
