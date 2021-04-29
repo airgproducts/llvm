@@ -4495,7 +4495,7 @@ class OffloadingActionBuilder final {
 
       // If there are no CUDA architectures provided then default to SM_50.
       if (GpuArchList.empty()) {
-        GpuArchList.push_back(CudaArch::SM_75);
+        GpuArchList.push_back(CudaArch::SM_50);
       }
 
       return false;
