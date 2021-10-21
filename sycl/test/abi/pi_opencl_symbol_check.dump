@@ -13,6 +13,7 @@ piDevicesGet
 piEnqueueMemBufferMap
 piEventCreate
 piKernelCreate
+piKernelGetGroupInfo
 piKernelGetSubGroupInfo
 piKernelSetExecInfo
 piMemBufferCreate
@@ -34,6 +35,8 @@ piextDeviceGetNativeHandle
 piextDeviceSelectBinary
 piextEventCreateWithNativeHandle
 piextGetDeviceFunctionPointer
+piextKernelCreateWithNativeHandle
+piextKernelGetNativeHandle
 piextKernelSetArgMemObj
 piextKernelSetArgPointer
 piextKernelSetArgSampler

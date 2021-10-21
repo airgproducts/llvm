@@ -131,7 +131,7 @@ namespace {
     // will be split.
     SetVector<std::pair<MachineBasicBlock *, MachineBasicBlock *>> ToSplit;
 
-    SparseBitVector<> RegsToClearKillFlags;
+    DenseSet<Register> RegsToClearKillFlags;
 
     using AllSuccsCache =
         std::map<MachineBasicBlock *, SmallVector<MachineBasicBlock *, 4>>;
@@ -530,7 +530,7 @@ bool MachineSinking::ProcessBlock(MachineBasicBlock &MBB) {
     if (!ProcessedBegin)
       --I;
 
-    if (MI.isDebugInstr()) {
+    if (MI.isDebugOrPseudoInstr()) {
       if (MI.isDebugValue())
         ProcessDbgInst(MI);
       continue;
@@ -718,7 +718,7 @@ MachineSinking::getBBRegisterPressure(MachineBasicBlock &MBB) {
                                    MIE = MBB.instr_begin();
        MII != MIE; --MII) {
     MachineInstr &MI = *std::prev(MII);
-    if (MI.isDebugValue() || MI.isDebugLabel())
+    if (MI.isDebugInstr() || MI.isPseudoProbe())
       continue;
     RegisterOperands RegOpers;
     RegOpers.collect(MI, *TRI, *MRI, false, false);
@@ -1439,7 +1439,7 @@ bool MachineSinking::SinkInstruction(MachineInstr &MI, bool &SawStore,
   // used registers.
   for (MachineOperand &MO : MI.operands()) {
     if (MO.isReg() && MO.isUse())
-      RegsToClearKillFlags.set(MO.getReg()); // Remember to clear kill flags.
+      RegsToClearKillFlags.insert(MO.getReg()); // Remember to clear kill flags.
   }
 
   return true;
@@ -1755,7 +1755,7 @@ bool PostRAMachineSinking::tryToSinkCopy(MachineBasicBlock &CurBB,
       continue;
     }
 
-    if (MI->isDebugInstr())
+    if (MI->isDebugOrPseudoInstr())
       continue;
 
     // Do not move any instruction across function call.

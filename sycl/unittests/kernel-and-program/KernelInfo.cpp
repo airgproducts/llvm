@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define SYCL2020_DISABLE_DEPRECATION_WARNINGS
+
 #include <CL/sycl.hpp>
 #include <detail/context_impl.hpp>
 #include <gtest/gtest.h>
@@ -121,7 +123,7 @@ TEST_F(KernelInfoTest, GetPrivateMemUsage) {
     return;
   }
 
-  context Ctx{Plt};
+  context Ctx{Plt.get_devices()[0]};
   program Prg{Ctx};
   TestContext.reset(new TestCtx(Ctx));
 

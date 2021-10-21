@@ -17,27 +17,28 @@
 
 using namespace llvm;
 
-/// Sets dso_local to false for all global values.
-static void extractGVsFromModule(std::vector<Chunk> ChunksToKeep,
-                                 Module *Program) {
-  Oracle O(ChunksToKeep);
+static bool isValidDSOLocalReductionGV(GlobalValue &GV) {
+  return GV.isDSOLocal() && !GV.isImplicitDSOLocal();
+}
 
+/// Sets dso_local to false for all global values.
+static void extractGVsFromModule(Oracle &O, Module &Program) {
   // remove dso_local from global values
-  for (auto &GV : Program->global_values())
-    if (GV.isDSOLocal() && !O.shouldKeep()) {
+  for (auto &GV : Program.global_values())
+    if (isValidDSOLocalReductionGV(GV) && !O.shouldKeep()) {
       GV.setDSOLocal(false);
     }
 }
 
 /// Counts the amount of global values with dso_local and displays their
 /// respective name & index
-static int countGVs(Module *Program) {
+static int countGVs(Module &Program) {
   // TODO: Silence index with --quiet flag
   outs() << "----------------------------\n";
   outs() << "GlobalValue Index Reference:\n";
   int GVCount = 0;
-  for (auto &GV : Program->global_values())
-    if (GV.isDSOLocal())
+  for (auto &GV : Program.global_values())
+    if (isValidDSOLocalReductionGV(GV))
       outs() << "\t" << ++GVCount << ": " << GV.getName() << "\n";
   outs() << "----------------------------\n";
   return GVCount;

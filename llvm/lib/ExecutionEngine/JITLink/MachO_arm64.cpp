@@ -413,9 +413,8 @@ public:
       PerGraphGOTAndPLTStubsBuilder_MachO_arm64>::PerGraphGOTAndPLTStubsBuilder;
 
   bool isGOTEdgeToFix(Edge &E) const {
-    return (E.getKind() == GOTPage21 || E.getKind() == GOTPageOffset12 ||
-            E.getKind() == PointerToGOT) &&
-           E.getTarget().isExternal();
+    return E.getKind() == GOTPage21 || E.getKind() == GOTPageOffset12 ||
+           E.getKind() == PointerToGOT;
   }
 
   Symbol &createGOTEntry(Symbol &Target) {
@@ -458,16 +457,14 @@ public:
 private:
   Section &getGOTSection() {
     if (!GOTSection)
-      GOTSection = &G.createSection("$__GOT", sys::Memory::MF_READ);
+      GOTSection = &G.createSection("$__GOT", MemProt::Read);
     return *GOTSection;
   }
 
   Section &getStubsSection() {
-    if (!StubsSection) {
-      auto StubsProt = static_cast<sys::Memory::ProtectionFlags>(
-          sys::Memory::MF_READ | sys::Memory::MF_EXEC);
-      StubsSection = &G.createSection("$__STUBS", StubsProt);
-    }
+    if (!StubsSection)
+      StubsSection =
+          &G.createSection("$__STUBS", MemProt::Read | MemProt::Exec);
     return *StubsSection;
   }
 
@@ -526,10 +523,10 @@ private:
     return 0;
   }
 
-  Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
-                   char *BlockWorkingMem) const {
+  Error applyFixup(LinkGraph &G, Block &B, const Edge &E) const {
     using namespace support;
 
+    char *BlockWorkingMem = B.getAlreadyMutableContent().data();
     char *FixupPtr = BlockWorkingMem + E.getOffset();
     JITTargetAddress FixupAddress = B.getAddress() + E.getOffset();
 
@@ -630,7 +627,8 @@ private:
       if (Delta < -(1 << 20) || Delta > ((1 << 20) - 1))
         return makeTargetOutOfRangeError(G, B, E);
 
-      uint32_t EncodedImm = (static_cast<uint32_t>(Delta) >> 2) << 5;
+      uint32_t EncodedImm =
+        ((static_cast<uint32_t>(Delta) >> 2) & 0x7ffff) << 5;
       uint32_t FixedInstr = RawInstr | EncodedImm;
       *(ulittle32_t *)FixupPtr = FixedInstr;
       break;
@@ -683,6 +681,10 @@ void link_MachO_arm64(std::unique_ptr<LinkGraph> G,
       Config.PrePrunePasses.push_back(std::move(MarkLive));
     else
       Config.PrePrunePasses.push_back(markAllSymbolsLive);
+
+    // Add compact unwind splitter pass.
+    Config.PrePrunePasses.push_back(
+        CompactUnwindSplitter("__LD,__compact_unwind"));
 
     // Add an in-place GOT/Stubs pass.
     Config.PostPrunePasses.push_back(

@@ -17,7 +17,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -66,7 +66,8 @@ void gpu::SerializeToBlobPass::runOnOperation() {
     return signalPassFailure();
 
   // Add the blob as module attribute.
-  auto attr = StringAttr::get(&getContext(), {blob->data(), blob->size()});
+  auto attr =
+      StringAttr::get(&getContext(), StringRef(blob->data(), blob->size()));
   getOperation()->setAttr(gpuBinaryAnnotation, attr);
 }
 

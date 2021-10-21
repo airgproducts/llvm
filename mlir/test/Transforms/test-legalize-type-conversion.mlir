@@ -1,7 +1,9 @@
 // RUN: mlir-opt %s -test-legalize-type-conversion -allow-unregistered-dialect -split-input-file -verify-diagnostics | FileCheck %s
 
-// expected-error@below {{failed to materialize conversion for block argument #0 that remained live after conversion, type was 'i16'}}
-func @test_invalid_arg_materialization(%arg0: i16) {
+
+func @test_invalid_arg_materialization(
+  // expected-error@below {{failed to materialize conversion for block argument #0 that remained live after conversion, type was 'i16'}}
+  %arg0: i16) {
   // expected-note@below {{see existing live user here}}
   "foo.return"(%arg0) : (i16) -> ()
 }
@@ -94,6 +96,20 @@ func @test_signature_conversion_undo() {
   ^bb0(%arg0: f32):
     "test.type_consumer"(%arg0) : (f32) -> ()
     "test.return"(%arg0) : (f32) -> ()
+  }) : () -> ()
+  return
+}
+
+// -----
+
+// Should not segfault here but gracefully fail.
+// CHECK-LABEL: func @test_block_argument_not_converted
+func @test_block_argument_not_converted() {
+  "test.unsupported_block_arg_type"() ({
+    // NOTE: The test pass does not convert `index` types.
+    // CHECK: ^bb0({{.*}}: index):
+    ^bb0(%0 : index):
+      "test.return"(%0) : (index) -> ()
   }) : () -> ()
   return
 }

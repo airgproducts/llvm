@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define SYCL2020_DISABLE_DEPRECATION_WARNINGS
+
 #include <CL/sycl.hpp>
 #include <detail/context_impl.hpp>
 #include <gtest/gtest.h>
@@ -101,7 +103,7 @@ TEST(KernelReleaseTest, GetKernelRelease) {
   Mock.redefine<detail::PiApiKind::piKernelSetExecInfo>(
       redefinedKernelSetExecInfo);
 
-  context Ctx{Plt};
+  context Ctx{Plt.get_devices()[0]};
   TestContext.reset(new TestCtx(Ctx));
 
   program Prg{Ctx};

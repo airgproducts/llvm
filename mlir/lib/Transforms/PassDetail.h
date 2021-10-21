@@ -10,15 +10,18 @@
 #define TRANSFORMS_PASSDETAIL_H_
 
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/Passes.h"
 
 namespace mlir {
+class AffineDialect;
+
 // Forward declaration from Dialect.h
 template <typename ConcreteDialect>
 void registerDialect(DialectRegistry &registry);
 
-namespace linalg {
-class LinalgDialect;
-} // end namespace linalg
+namespace arith {
+class ArithmeticDialect;
+} // end namespace arith
 
 namespace memref {
 class MemRefDialect;

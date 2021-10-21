@@ -472,7 +472,7 @@ void MoveChecker::checkPostCall(const CallEvent &Call,
   const MemRegion *BaseRegion = ArgRegion->getBaseRegion();
   // Skip temp objects because of their short lifetime.
   if (BaseRegion->getAs<CXXTempObjectRegion>() ||
-      AFC->getArgExpr(0)->isRValue())
+      AFC->getArgExpr(0)->isPRValue())
     return;
   // If it has already been reported do not need to modify the state.
 
@@ -712,12 +712,9 @@ ProgramStateRef MoveChecker::checkRegionChanges(
     // directly, but not all of them end up being invalidated.
     // But when they do, they appear in the InvalidatedRegions array as well.
     for (const auto *Region : RequestedRegions) {
-      if (ThisRegion != Region) {
-        if (llvm::find(InvalidatedRegions, Region) !=
-            std::end(InvalidatedRegions)) {
-          State = removeFromState(State, Region);
-        }
-      }
+      if (ThisRegion != Region &&
+          llvm::is_contained(InvalidatedRegions, Region))
+        State = removeFromState(State, Region);
     }
   } else {
     // For invalidations that aren't caused by calls, assume nothing. In

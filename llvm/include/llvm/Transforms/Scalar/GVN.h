@@ -21,7 +21,6 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/InstructionPrecedenceTracking.h"
-#include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/PassManager.h"
@@ -47,8 +46,11 @@ class FunctionPass;
 class IntrinsicInst;
 class LoadInst;
 class LoopInfo;
+class MemDepResult;
+class MemoryDependenceResults;
 class MemorySSA;
 class MemorySSAUpdater;
+class NonLocalDepResult;
 class OptimizationRemarkEmitter;
 class PHINode;
 class TargetLibraryInfo;
@@ -123,6 +125,9 @@ public:
 
   /// Run the pass over the function.
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+
+  void printPipeline(raw_ostream &OS,
+                     function_ref<StringRef(StringRef)> MapClassName2PassName);
 
   /// This removes the specified instruction from
   /// our various maps and marks it for deletion.
@@ -327,6 +332,12 @@ private:
 
   bool PerformLoadPRE(LoadInst *Load, AvailValInBlkVect &ValuesPerBlock,
                       UnavailBlkVect &UnavailableBlocks);
+
+  /// Try to replace a load which executes on each loop iteraiton with Phi
+  /// translation of load in preheader and load(s) in conditionally executed
+  /// paths.
+  bool performLoopLoadPRE(LoadInst *Load, AvailValInBlkVect &ValuesPerBlock,
+                          UnavailBlkVect &UnavailableBlocks);
 
   /// Eliminates partially redundant \p Load, replacing it with \p
   /// AvailableLoads (connected by Phis if needed).

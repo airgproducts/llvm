@@ -14,6 +14,7 @@
 #ifndef LLVM_CLANG_BASIC_OPENMPKINDS_H
 #define LLVM_CLANG_BASIC_OPENMPKINDS_H
 
+#include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 
@@ -166,8 +167,15 @@ enum OpenMPReductionClauseModifier {
   OMPC_REDUCTION_unknown,
 };
 
+/// OpenMP adjust-op kinds for 'adjust_args' clause.
+enum OpenMPAdjustArgsOpKind {
+#define OPENMP_ADJUST_ARGS_KIND(Name) OMPC_ADJUST_ARGS_##Name,
+#include "clang/Basic/OpenMPKinds.def"
+  OMPC_ADJUST_ARGS_unknown,
+};
+
 unsigned getOpenMPSimpleClauseType(OpenMPClauseKind Kind, llvm::StringRef Str,
-                                   unsigned OpenMPVersion);
+                                   const LangOptions &LangOpts);
 const char *getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind, unsigned Type);
 
 /// Checks if the specified directive is a directive with an associated

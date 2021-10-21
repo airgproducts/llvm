@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
+#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/GPU/Passes.h"
 #include "mlir/Dialect/GPU/Utils.h"
@@ -59,7 +60,8 @@ static void injectGpuIndexOperations(Location loc, Region &launchFuncOpBody,
 /// operations may not have side-effects, as otherwise sinking (and hence
 /// duplicating them) is not legal.
 static bool isSinkingBeneficiary(Operation *op) {
-  return isa<ConstantOp, memref::DimOp, SelectOp, CmpIOp>(op);
+  return isa<arith::ConstantOp, ConstantOp, memref::DimOp, SelectOp,
+             arith::CmpIOp>(op);
 }
 
 /// For a given operation `op`, computes whether it is beneficial to sink the
@@ -74,9 +76,8 @@ static bool isSinkingBeneficiary(Operation *op) {
 /// is updated with results that will be available after sinking the identified
 /// ops.
 static bool
-extractBeneficiaryOps(Operation *op,
-                      llvm::SetVector<Value> existingDependencies,
-                      llvm::SetVector<Operation *> &beneficiaryOps,
+extractBeneficiaryOps(Operation *op, SetVector<Value> existingDependencies,
+                      SetVector<Operation *> &beneficiaryOps,
                       llvm::SmallPtrSetImpl<Value> &availableValues) {
   if (beneficiaryOps.count(op))
     return true;
@@ -109,10 +110,10 @@ LogicalResult mlir::sinkOperationsIntoLaunchOp(gpu::LaunchOp launchOp) {
 
   // Identify uses from values defined outside of the scope of the launch
   // operation.
-  llvm::SetVector<Value> sinkCandidates;
+  SetVector<Value> sinkCandidates;
   getUsedValuesDefinedAbove(launchOpBody, sinkCandidates);
 
-  llvm::SetVector<Operation *> toBeSunk;
+  SetVector<Operation *> toBeSunk;
   llvm::SmallPtrSet<Value, 4> availableValues;
   for (Value operand : sinkCandidates) {
     Operation *operandOp = operand.getDefiningOp();
@@ -138,7 +139,7 @@ LogicalResult mlir::sinkOperationsIntoLaunchOp(gpu::LaunchOp launchOp) {
 /// `gpu.terminator` operations by `gpu.return` in the generated function.
 static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp,
                                             StringRef kernelFnName,
-                                            llvm::SetVector<Value> &operands) {
+                                            SetVector<Value> &operands) {
   Location loc = launchOp.getLoc();
   // Create a builder with no insertion point, insertion will happen separately
   // due to symbol table manipulation.
@@ -200,7 +201,7 @@ gpu::GPUFuncOp mlir::outlineKernelFunc(gpu::LaunchOp launchOp,
                                        llvm::SmallVectorImpl<Value> &operands) {
   DenseSet<Value> inputOperandSet;
   inputOperandSet.insert(operands.begin(), operands.end());
-  llvm::SetVector<Value> operandSet(operands.begin(), operands.end());
+  SetVector<Value> operandSet(operands.begin(), operands.end());
   auto funcOp = outlineKernelFuncImpl(launchOp, kernelFnName, operandSet);
   for (auto operand : operandSet) {
     if (!inputOperandSet.count(operand))
@@ -216,9 +217,12 @@ static void convertToLaunchFuncOp(gpu::LaunchOp launchOp,
                                   gpu::GPUFuncOp kernelFunc,
                                   ValueRange operands) {
   OpBuilder builder(launchOp);
+  // The launch op has an optional dynamic shared memory size. If it doesn't
+  // exist, we use zero.
   builder.create<gpu::LaunchFuncOp>(
       launchOp.getLoc(), kernelFunc, launchOp.getGridSizeOperandValues(),
-      launchOp.getBlockSizeOperandValues(), operands);
+      launchOp.getBlockSizeOperandValues(), launchOp.dynamicSharedMemorySize(),
+      operands);
   launchOp.erase();
 }
 
@@ -242,7 +246,7 @@ public:
       // Insert just after the function.
       Block::iterator insertPt(func->getNextNode());
       auto funcWalkResult = func.walk([&](gpu::LaunchOp op) {
-        llvm::SetVector<Value> operands;
+        SetVector<Value> operands;
         std::string kernelFnName =
             Twine(op->getParentOfType<FuncOp>().getName(), "_kernel").str();
 

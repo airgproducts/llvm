@@ -9,7 +9,7 @@
 #include "PlatformLinux.h"
 #include "lldb/Host/Config.h"
 
-#include <stdio.h>
+#include <cstdio>
 #if LLDB_ENABLE_POSIX
 #include <sys/utsname.h>
 #endif
@@ -87,10 +87,6 @@ const char *PlatformLinux::GetPluginDescriptionStatic(bool is_host) {
     return "Local Linux user platform plug-in.";
   else
     return "Remote Linux user platform plug-in.";
-}
-
-ConstString PlatformLinux::GetPluginName() {
-  return GetPluginNameStatic(IsHost());
 }
 
 void PlatformLinux::Initialize() {

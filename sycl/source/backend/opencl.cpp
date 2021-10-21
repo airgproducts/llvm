@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <CL/sycl.hpp>
+#include <detail/kernel_impl.hpp>
 #include <detail/platform_impl.hpp>
 #include <detail/plugin.hpp>
 #include <detail/program_impl.hpp>
@@ -51,10 +52,9 @@ __SYCL_EXPORT program make_program(const context &Context,
 __SYCL_EXPORT queue make_queue(const context &Context,
                                pi_native_handle NativeHandle) {
   const auto &ContextImpl = getSyclObjImpl(Context);
-  return detail::make_queue(NativeHandle, Context,
+  return detail::make_queue(NativeHandle, Context, false,
                             ContextImpl->get_async_handler(), backend::opencl);
 }
-
 } // namespace opencl
 } // namespace sycl
 } // __SYCL_INLINE_NAMESPACE(cl)

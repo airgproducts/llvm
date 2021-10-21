@@ -107,6 +107,9 @@ public:
   enum SubArchType {
     NoSubArch,
 
+    ARMSubArch_v9_2a,
+    ARMSubArch_v9_1a,
+    ARMSubArch_v9,
     ARMSubArch_v8_7a,
     ARMSubArch_v8_6a,
     ARMSubArch_v8_5a,
@@ -230,7 +233,6 @@ public:
     Itanium,
     Cygnus,
     CoreCLR,
-    SYCLDevice,
     Simulator,  // Simulator variants of other systems, e.g., Apple's iOS
     MacABI, // Mac Catalyst variant of Apple's iOS deployment target.
     LastEnvironmentType = MacABI
@@ -494,10 +496,6 @@ public:
 
   bool isSimulatorEnvironment() const {
     return getEnvironment() == Triple::Simulator;
-  }
-
-  bool isSYCLDeviceEnvironment() const {
-    return getEnvironment() == Triple::SYCLDevice;
   }
 
   bool isMacCatalystEnvironment() const {
@@ -814,6 +812,12 @@ public:
   bool isArm64e() const {
     return getArch() == Triple::aarch64 &&
            getSubArch() == Triple::AArch64SubArch_arm64e;
+  }
+
+  /// Tests whether the target is X32.
+  bool isX32() const {
+    EnvironmentType Env = getEnvironment();
+    return Env == Triple::GNUX32 || Env == Triple::MuslX32;
   }
 
   /// Tests whether the target supports comdat

@@ -34,6 +34,10 @@ bool device_image_plain::has_kernel(const kernel_id &KernelID,
   return impl->has_kernel(KernelID, Dev);
 }
 
+pi_native_handle device_image_plain::getNative() const {
+  return impl->getNative();
+}
+
 ////////////////////////////
 ///// kernel_bundle_plain
 ///////////////////////////
@@ -91,13 +95,12 @@ bool kernel_bundle_plain::has_specialization_constant_impl(
 }
 
 void kernel_bundle_plain::set_specialization_constant_impl(
-    const char *SpecName, void *Value) noexcept {
-  impl->set_specialization_constant_raw_value(SpecName, Value);
+    const char *SpecName, void *Value, size_t Size) noexcept {
+  impl->set_specialization_constant_raw_value(SpecName, Value, Size);
 }
 
-void kernel_bundle_plain::get_specialization_constant_impl(const char *SpecName,
-                                                           void *Value) const
-    noexcept {
+void kernel_bundle_plain::get_specialization_constant_impl(
+    const char *SpecName, void *Value) const noexcept {
   impl->get_specialization_constant_raw_value(SpecName, Value);
 }
 
@@ -106,9 +109,13 @@ bool kernel_bundle_plain::is_specialization_constant_set(
   return impl->is_specialization_constant_set(SpecName);
 }
 
-////////////////////////////
-///// free functions
-///////////////////////////
+//////////////////////////////////
+///// sycl::detail free functions
+//////////////////////////////////
+
+kernel_id get_kernel_id_impl(std::string KernelName) {
+  return detail::ProgramManager::getInstance().getSYCLKernelID(KernelName);
+}
 
 detail::KernelBundleImplPtr
 get_kernel_bundle_impl(const context &Ctx, const std::vector<device> &Devs,
@@ -173,7 +180,7 @@ bool has_kernel_bundle_impl(const context &Ctx, const std::vector<device> &Devs,
                           "Not all devices are associated with the context or "
                           "vector of devices is empty");
 
-  bool DeviceHasRequireAspectForState = false;
+  bool DeviceHasRequireAspectForState = true;
   if (bundle_state::input == State) {
     DeviceHasRequireAspectForState =
         std::all_of(Devs.begin(), Devs.end(), [](const device &Dev) {
@@ -258,6 +265,14 @@ std::vector<sycl::device> find_device_intersection(
 }
 
 } // namespace detail
+
+//////////////////////////
+///// sycl free functions
+//////////////////////////
+
+std::vector<kernel_id> get_kernel_ids() {
+  return detail::ProgramManager::getInstance().getAllSYCLKernelIDs();
+}
 
 } // namespace sycl
 } // __SYCL_INLINE_NAMESPACE(cl)

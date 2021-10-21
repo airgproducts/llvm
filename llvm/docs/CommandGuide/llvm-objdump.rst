@@ -27,7 +27,7 @@ combined with other commands:
 
 .. option:: -d, --disassemble
 
-  Disassemble all text sections found in the input files.
+  Disassemble all executable sections found in the input files.
 
 .. option:: -D, --disassemble-all
 
@@ -92,8 +92,10 @@ combined with other commands:
 .. option:: -u, --unwind-info
 
   Display the unwind info of the input(s).
+  
+  This operation is only currently supported for COFF and Mach-O object files.
 
-.. option:: --version
+.. option:: -v, --version
 
   Display the version of the :program:`llvm-objdump` executable. Does not stack
   with other commands.
@@ -132,7 +134,7 @@ OPTIONS
 .. option:: --debug-vars-indent=<width>
 
   Distance to indent the source-level variable display, relative to the start
-  of the disassembly. Defaults to 40 characters.
+  of the disassembly. Defaults to 52 characters.
 
 .. option:: -j, --section=<section1[,section2,...]>
 
@@ -146,8 +148,14 @@ OPTIONS
 
 .. option:: -M, --disassembler-options=<opt1[,opt2,...]>
 
-  Pass target-specific disassembler options. Currently supported for ARM targets
-  only. Available options are ``reg-names-std`` and ``reg-names-raw``.
+  Pass target-specific disassembler options. Available options:
+
+  * ``reg-names-std``: ARM only (default). Print in ARM 's instruction set documentation, with r13/r14/r15 replaced by sp/lr/pc.
+  * ``reg-names-raw``: ARM only. Use r followed by the register number.
+  * ``no-aliases``: AArch64 and RISC-V only. Print raw instruction mnemonic instead of pseudo instruction mnemonic.
+  * ``numeric``: RISC-V only. Print raw register names instead of ABI mnemonic. (e.g. print x1 instead of ra)
+  * ``att``: x86 only (default). Print in the AT&T syntax.
+  * ``intel``: x86 only. Print in the intel syntax.
 
 .. option:: --mcpu=<cpu-name>
 
@@ -162,6 +170,10 @@ OPTIONS
 .. option:: --no-leading-addr
 
   When disassembling, do not print leading addresses.
+
+.. option:: --no-print-imm-hex
+
+  Do not use hex format for immediate values in disassembly output (default).
 
 .. option:: --no-show-raw-insn
 
@@ -242,6 +254,7 @@ OPTIONS
 
 .. option:: --x86-asm-syntax=<style>
 
+  Deprecated.
   When used with :option:`--disassemble`, choose style of code to emit from
   X86 backend. Supported values are:
 
@@ -280,11 +293,6 @@ MACH-O ONLY OPTIONS AND COMMANDS
 .. option:: --bind
 
   Display binding info
-
-.. option:: --cfg
-
-  Create a CFG for every symbol in the object file and write it to a graphviz
-  file.
 
 .. option:: --data-in-code
 
@@ -367,6 +375,10 @@ MACH-O ONLY OPTIONS AND COMMANDS
 
   Display rebasing information.
 
+.. option:: --rpaths
+
+  Display runtime search paths for the binary.
+
 .. option:: --universal-headers
 
   Display universal headers.
@@ -390,4 +402,5 @@ To report bugs, please visit <https://bugs.llvm.org/>.
 SEE ALSO
 --------
 
-:manpage:`llvm-nm(1)`, :manpage:`llvm-readelf(1)`, :manpage:`llvm-readobj(1)`
+:manpage:`llvm-nm(1)`, :manpage:`llvm-otool(1)`, :manpage:`llvm-readelf(1)`,
+:manpage:`llvm-readobj(1)`

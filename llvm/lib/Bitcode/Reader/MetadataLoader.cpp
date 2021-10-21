@@ -1081,12 +1081,12 @@ void MetadataLoader::MetadataLoaderImpl::lazyLoadOneMetadata(
   if (Error Err = IndexCursor.JumpToBit(
           GlobalMetadataBitPosIndex[ID - MDStringRef.size()]))
     report_fatal_error("lazyLoadOneMetadata failed jumping: " +
-                       toString(std::move(Err)));
+                       Twine(toString(std::move(Err))));
   Expected<BitstreamEntry> MaybeEntry = IndexCursor.advanceSkippingSubblocks();
   if (!MaybeEntry)
     // FIXME this drops the error on the floor.
     report_fatal_error("lazyLoadOneMetadata failed advanceSkippingSubblocks: " +
-                       toString(MaybeEntry.takeError()));
+                       Twine(toString(MaybeEntry.takeError())));
   BitstreamEntry Entry = MaybeEntry.get();
   ++NumMDRecordLoaded;
   if (Expected<unsigned> MaybeCode =
@@ -1094,9 +1094,10 @@ void MetadataLoader::MetadataLoaderImpl::lazyLoadOneMetadata(
     if (Error Err =
             parseOneMetadata(Record, MaybeCode.get(), Placeholders, Blob, ID))
       report_fatal_error("Can't lazyload MD, parseOneMetadata: " +
-                         toString(std::move(Err)));
+                         Twine(toString(std::move(Err))));
   } else
-    report_fatal_error("Can't lazyload MD: " + toString(MaybeCode.takeError()));
+    report_fatal_error("Can't lazyload MD: " +
+                       Twine(toString(MaybeCode.takeError())));
 }
 
 /// Ensure that all forward-references and placeholders are resolved.
@@ -1437,7 +1438,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     break;
   }
   case bitc::METADATA_DERIVED_TYPE: {
-    if (Record.size() < 12 || Record.size() > 13)
+    if (Record.size() < 12 || Record.size() > 14)
       return error("Invalid record");
 
     // DWARF address space is encoded as N->getDWARFAddressSpace() + 1. 0 means
@@ -1445,6 +1446,10 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     Optional<unsigned> DWARFAddressSpace;
     if (Record.size() > 12 && Record[12])
       DWARFAddressSpace = Record[12] - 1;
+
+    Metadata *Annotations = nullptr;
+    if (Record.size() > 13 && Record[13])
+      Annotations = getMDOrNull(Record[13]);
 
     IsDistinct = Record[0];
     DINode::DIFlags Flags = static_cast<DINode::DIFlags>(Record[10]);
@@ -1455,13 +1460,13 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
                          getDITypeRefOrNull(Record[5]),
                          getDITypeRefOrNull(Record[6]), Record[7], Record[8],
                          Record[9], DWARFAddressSpace, Flags,
-                         getDITypeRefOrNull(Record[11]))),
+                         getDITypeRefOrNull(Record[11]), Annotations)),
         NextMetadataNo);
     NextMetadataNo++;
     break;
   }
   case bitc::METADATA_COMPOSITE_TYPE: {
-    if (Record.size() < 16 || Record.size() > 21)
+    if (Record.size() < 16 || Record.size() > 22)
       return error("Invalid record");
 
     // If we have a UUID and this is not a forward declaration, lookup the
@@ -1489,6 +1494,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     Metadata *Associated = nullptr;
     Metadata *Allocated = nullptr;
     Metadata *Rank = nullptr;
+    Metadata *Annotations = nullptr;
     auto *Identifier = getMDString(Record[15]);
     // If this module is being parsed so that it can be ThinLTO imported
     // into another module, composite types only need to be imported
@@ -1520,6 +1526,9 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
       if (Record.size() > 20) {
         Rank = getMDOrNull(Record[20]);
       }
+      if (Record.size() > 21) {
+        Annotations = getMDOrNull(Record[21]);
+      }
     }
     DICompositeType *CT = nullptr;
     if (Identifier)
@@ -1527,7 +1536,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
           Context, *Identifier, Tag, Name, File, Line, Scope, BaseType,
           SizeInBits, AlignInBits, OffsetInBits, Flags, Elements, RuntimeLang,
           VTableHolder, TemplateParams, Discriminator, DataLocation, Associated,
-          Allocated, Rank);
+          Allocated, Rank, Annotations);
 
     // Create a node if we didn't get a lazy ODR type.
     if (!CT)
@@ -1536,7 +1545,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
                             SizeInBits, AlignInBits, OffsetInBits, Flags,
                             Elements, RuntimeLang, VTableHolder, TemplateParams,
                             Identifier, Discriminator, DataLocation, Associated,
-                            Allocated, Rank));
+                            Allocated, Rank, Annotations));
     if (!IsNotUsedInTypeRef && Identifier)
       MetadataList.addTypeRef(*Identifier, *cast<DICompositeType>(CT));
 
@@ -1685,6 +1694,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     bool HasFn = false;
     bool HasThisAdj = true;
     bool HasThrownTypes = true;
+    bool HasAnnotations = false;
     unsigned OffsetA = 0;
     unsigned OffsetB = 0;
     if (!HasSPFlags) {
@@ -1696,6 +1706,8 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
       }
       HasThisAdj = Record.size() >= 20;
       HasThrownTypes = Record.size() >= 21;
+    } else {
+      HasAnnotations = Record.size() >= 19;
     }
     Metadata *CUorFn = getMDOrNull(Record[12 + OffsetB]);
     DISubprogram *SP = GET_OR_DISTINCT(
@@ -1718,7 +1730,9 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
          getMDOrNull(Record[14 + OffsetB]),                 // declaration
          getMDOrNull(Record[15 + OffsetB]),                 // retainedNodes
          HasThrownTypes ? getMDOrNull(Record[17 + OffsetB])
-                        : nullptr                           // thrownTypes
+                        : nullptr,                          // thrownTypes
+         HasAnnotations ? getMDOrNull(Record[18 + OffsetB])
+                        : nullptr                           // annotations
          ));
     MetadataList.assignValue(SP, NextMetadataNo);
     NextMetadataNo++;
@@ -1860,13 +1874,18 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     unsigned Version = Record[0] >> 1;
 
     if (Version == 2) {
+      Metadata *Annotations = nullptr;
+      if (Record.size() > 12)
+        Annotations = getMDOrNull(Record[12]);
+
       MetadataList.assignValue(
           GET_OR_DISTINCT(
               DIGlobalVariable,
               (Context, getMDOrNull(Record[1]), getMDString(Record[2]),
                getMDString(Record[3]), getMDOrNull(Record[4]), Record[5],
                getDITypeRefOrNull(Record[6]), Record[7], Record[8],
-               getMDOrNull(Record[9]), getMDOrNull(Record[10]), Record[11])),
+               getMDOrNull(Record[9]), getMDOrNull(Record[10]), Record[11],
+               Annotations)),
           NextMetadataNo);
 
       NextMetadataNo++;
@@ -1879,7 +1898,8 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
                            getMDString(Record[2]), getMDString(Record[3]),
                            getMDOrNull(Record[4]), Record[5],
                            getDITypeRefOrNull(Record[6]), Record[7], Record[8],
-                           getMDOrNull(Record[10]), nullptr, Record[11])),
+                           getMDOrNull(Record[10]), nullptr, Record[11],
+                           nullptr)),
           NextMetadataNo);
 
       NextMetadataNo++;
@@ -1912,7 +1932,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
           (Context, getMDOrNull(Record[1]), getMDString(Record[2]),
            getMDString(Record[3]), getMDOrNull(Record[4]), Record[5],
            getDITypeRefOrNull(Record[6]), Record[7], Record[8],
-           getMDOrNull(Record[10]), nullptr, AlignInBits));
+           getMDOrNull(Record[10]), nullptr, AlignInBits, nullptr));
 
       DIGlobalVariableExpression *DGVE = nullptr;
       if (Attach || Expr)
@@ -1942,18 +1962,23 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     bool HasTag = !HasAlignment && Record.size() > 8;
     DINode::DIFlags Flags = static_cast<DINode::DIFlags>(Record[7 + HasTag]);
     uint32_t AlignInBits = 0;
+    Metadata *Annotations = nullptr;
     if (HasAlignment) {
-      if (Record[8 + HasTag] > (uint64_t)std::numeric_limits<uint32_t>::max())
+      if (Record[8] > (uint64_t)std::numeric_limits<uint32_t>::max())
         return error("Alignment value is too large");
-      AlignInBits = Record[8 + HasTag];
+      AlignInBits = Record[8];
+      if (Record.size() > 9)
+        Annotations = getMDOrNull(Record[9]);
     }
+
     MetadataList.assignValue(
         GET_OR_DISTINCT(DILocalVariable,
                         (Context, getMDOrNull(Record[1 + HasTag]),
                          getMDString(Record[2 + HasTag]),
                          getMDOrNull(Record[3 + HasTag]), Record[4 + HasTag],
                          getDITypeRefOrNull(Record[5 + HasTag]),
-                         Record[6 + HasTag], Flags, AlignInBits)),
+                         Record[6 + HasTag], Flags, AlignInBits,
+                         Annotations)),
         NextMetadataNo);
     NextMetadataNo++;
     break;
@@ -2020,17 +2045,19 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     break;
   }
   case bitc::METADATA_IMPORTED_ENTITY: {
-    if (Record.size() != 6 && Record.size() != 7)
+    if (Record.size() < 6 && Record.size() > 8)
       return error("Invalid record");
 
     IsDistinct = Record[0];
-    bool HasFile = (Record.size() == 7);
+    bool HasFile = (Record.size() >= 7);
+    bool HasElements = (Record.size() >= 8);
     MetadataList.assignValue(
         GET_OR_DISTINCT(DIImportedEntity,
                         (Context, Record[1], getMDOrNull(Record[2]),
                          getDITypeRefOrNull(Record[3]),
                          HasFile ? getMDOrNull(Record[6]) : nullptr,
-                         HasFile ? Record[4] : 0, getMDString(Record[5]))),
+                         HasFile ? Record[4] : 0, getMDString(Record[5]),
+                         HasElements ? getMDOrNull(Record[7]) : nullptr)),
         NextMetadataNo);
     NextMetadataNo++;
     break;
@@ -2078,8 +2105,15 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
   case bitc::METADATA_ARG_LIST: {
     SmallVector<ValueAsMetadata *, 4> Elts;
     Elts.reserve(Record.size());
-    for (uint64_t Elt : Record)
-      Elts.push_back(dyn_cast_or_null<ValueAsMetadata>(getMDOrNull(Elt)));
+    for (uint64_t Elt : Record) {
+      Metadata *MD = getMD(Elt);
+      if (isa<MDNode>(MD) && cast<MDNode>(MD)->isTemporary())
+        return error(
+            "Invalid record: DIArgList should not contain forward refs");
+      if (!isa<ValueAsMetadata>(MD))
+        return error("Invalid record");
+      Elts.push_back(cast<ValueAsMetadata>(MD));
+    }
 
     MetadataList.assignValue(DIArgList::get(Context, Elts), NextMetadataNo);
     NextMetadataNo++;

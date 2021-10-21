@@ -7,8 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include <CL/sycl/detail/export.hpp>
+#include <CL/sycl/detail/pi.h>
 #include <CL/sycl/kernel.hpp>
 #include <CL/sycl/program.hpp>
+#include <detail/backend_impl.hpp>
+#include <detail/kernel_bundle_impl.hpp>
 #include <detail/kernel_impl.hpp>
 
 __SYCL_INLINE_NAMESPACE(cl) {
@@ -25,6 +28,14 @@ bool kernel::is_host() const { return impl->is_host(); }
 
 context kernel::get_context() const {
   return impl->get_info<info::kernel::context>();
+}
+
+backend kernel::get_backend() const noexcept { return getImplBackend(impl); }
+
+kernel_bundle<sycl::bundle_state::executable>
+kernel::get_kernel_bundle() const {
+  return detail::createSyclObjFromImpl<
+      kernel_bundle<sycl::bundle_state::executable>>(impl->get_kernel_bundle());
 }
 
 program kernel::get_program() const {
@@ -116,6 +127,8 @@ kernel::get_sub_group_info(
 #undef __SYCL_PARAM_TRAITS_SPEC_WITH_INPUT
 
 kernel::kernel(std::shared_ptr<detail::kernel_impl> Impl) : impl(Impl) {}
+
+pi_native_handle kernel::getNativeImpl() const { return impl->getNative(); }
 
 } // namespace sycl
 } // __SYCL_INLINE_NAMESPACE(cl)

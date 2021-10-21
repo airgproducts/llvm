@@ -11,6 +11,7 @@
 #include <CL/sycl/backend_types.hpp>
 #include <CL/sycl/context.hpp>
 #include <CL/sycl/detail/common.hpp>
+#include <CL/sycl/detail/pi.h>
 #include <CL/sycl/device.hpp>
 #include <CL/sycl/kernel_bundle.hpp>
 #include <detail/device_image_impl.hpp>
@@ -54,6 +55,8 @@ static bool checkAllDevicesHaveAspect(const std::vector<device> &Devices,
 // objects.
 class kernel_bundle_impl {
 
+  using SpecConstMapT = std::map<std::string, std::vector<unsigned char>>;
+
   void common_ctor_checks(bundle_state State) {
     const bool AllDevicesInTheContext =
         checkAllDevicesAreInContext(MDevices, MContext);
@@ -84,6 +87,19 @@ public:
         MContext, MDevices, State);
   }
 
+  // Interop constructor
+  kernel_bundle_impl(context Ctx, std::vector<device> Devs,
+                     device_image_plain &DevImage)
+      : MContext(Ctx), MDevices(Devs) {
+    if (!checkAllDevicesAreInContext(Devs, Ctx))
+      throw sycl::exception(
+          make_error_code(errc::invalid),
+          "Not all devices are associated with the context or "
+          "vector of devices is empty");
+    MDeviceImages.push_back(DevImage);
+    MIsInterop = true;
+  }
+
   // Matches sycl::build and sycl::compile
   // Have one constructor because sycl::build and sycl::compile have the same
   // signature
@@ -91,6 +107,8 @@ public:
                      std::vector<device> Devs, const property_list &PropList,
                      bundle_state TargetState)
       : MContext(InputBundle.get_context()), MDevices(std::move(Devs)) {
+
+    MSpecConstValues = getSyclObjImpl(InputBundle)->get_spec_const_map_ref();
 
     const std::vector<device> &InputBundleDevices =
         getSyclObjImpl(InputBundle)->get_devices();
@@ -140,6 +158,10 @@ public:
       std::vector<device> Devs, const property_list &PropList)
       : MDevices(std::move(Devs)) {
 
+    if (MDevices.empty())
+      throw sycl::exception(make_error_code(errc::invalid),
+                            "Vector of devices is empty");
+
     if (ObjectBundles.empty())
       return;
 
@@ -166,16 +188,21 @@ public:
                                                         Dev);
               });
         });
-    if (MDevices.empty() || !AllDevsAssociatedWithInputBundles)
-      throw sycl::exception(
-          make_error_code(errc::invalid),
-          "Not all devices are in the set of associated "
-          "devices for input bundles or vector of devices is empty");
+    if (!AllDevsAssociatedWithInputBundles)
+      throw sycl::exception(make_error_code(errc::invalid),
+                            "Not all devices are in the set of associated "
+                            "devices for input bundles");
 
     // TODO: Unify with c'tor for sycl::comile and sycl::build by calling
     // sycl::join on vector of kernel_bundles
 
-    std::vector<device_image_plain> DeviceImages;
+    // The loop below just links each device image separately, not linking any
+    // two device images together. This is correct so long as each device image
+    // has no unresolved symbols. That's the case when device images are created
+    // from generic SYCL APIs. There's no way in generic SYCL to create a kernel
+    // which references an undefined symbol. If we decide in the future to allow
+    // a backend interop API to create a "sycl::kernel_bundle" that references
+    // undefined symbols, then the logic in this loop will need to be changed.
     for (const kernel_bundle<bundle_state::object> &ObjectBundle :
          ObjectBundles) {
       for (const device_image_plain &DeviceImage : ObjectBundle) {
@@ -188,12 +215,22 @@ public:
                          }))
           continue;
 
-        DeviceImages.insert(DeviceImages.end(), DeviceImage);
+        const std::vector<device_image_plain> VectorOfOneImage{DeviceImage};
+        std::vector<device_image_plain> LinkedResults =
+            detail::ProgramManager::getInstance().link(VectorOfOneImage,
+                                                       MDevices, PropList);
+        MDeviceImages.insert(MDeviceImages.end(), LinkedResults.begin(),
+                             LinkedResults.end());
       }
     }
 
-    MDeviceImages = detail::ProgramManager::getInstance().link(
-        std::move(DeviceImages), MDevices, PropList);
+    for (const kernel_bundle<bundle_state::object> &Bundle : ObjectBundles) {
+      const KernelBundleImplPtr BundlePtr = getSyclObjImpl(Bundle);
+      for (const std::pair<const std::string, std::vector<unsigned char>>
+               &SpecConst : BundlePtr->MSpecConstValues) {
+        MSpecConstValues[SpecConst.first] = SpecConst.second;
+      }
+    }
   }
 
   kernel_bundle_impl(context Ctx, std::vector<device> Devs,
@@ -245,9 +282,45 @@ public:
 
     std::sort(MDeviceImages.begin(), MDeviceImages.end(),
               LessByHash<device_image_plain>{});
+
+    if (get_bundle_state() == bundle_state::input) {
+      // Copy spec constants values from the device images to be removed.
+      auto MergeSpecConstants = [this](const device_image_plain &Img) {
+        const detail::DeviceImageImplPtr &ImgImpl = getSyclObjImpl(Img);
+        const std::map<std::string,
+                       std::vector<device_image_impl::SpecConstDescT>>
+            &SpecConsts = ImgImpl->get_spec_const_data_ref();
+        const std::vector<unsigned char> &Blob =
+            ImgImpl->get_spec_const_blob_ref();
+        for (const std::pair<const std::string,
+                             std::vector<device_image_impl::SpecConstDescT>>
+                 &SpecConst : SpecConsts) {
+          if (SpecConst.second.front().IsSet)
+            set_specialization_constant_raw_value(
+                SpecConst.first.c_str(),
+                Blob.data() + SpecConst.second.front().BlobOffset,
+                SpecConst.second.back().CompositeOffset +
+                    SpecConst.second.back().Size);
+        }
+      };
+      std::for_each(MDeviceImages.begin(), MDeviceImages.end(),
+                    MergeSpecConstants);
+    }
+
     const auto DevImgIt =
         std::unique(MDeviceImages.begin(), MDeviceImages.end());
+
+    // Remove duplicate device images.
     MDeviceImages.erase(DevImgIt, MDeviceImages.end());
+
+    for (const detail::KernelBundleImplPtr &Bundle : Bundles) {
+      for (const std::pair<const std::string, std::vector<unsigned char>>
+               &SpecConst : Bundle->MSpecConstValues) {
+        set_specialization_constant_raw_value(SpecConst.first.c_str(),
+                                              SpecConst.second.data(),
+                                              SpecConst.second.size());
+      }
+    }
   }
 
   bool empty() const noexcept { return MDeviceImages.empty(); }
@@ -347,12 +420,18 @@ public:
   }
 
   void set_specialization_constant_raw_value(const char *SpecName,
-                                             const void *Value) noexcept {
-    // TODO add support for specialization constants, that are missing in any
-    // device image.
-    for (const device_image_plain &DeviceImage : MDeviceImages)
-      getSyclObjImpl(DeviceImage)
-          ->set_specialization_constant_raw_value(SpecName, Value);
+                                             const void *Value,
+                                             size_t Size) noexcept {
+    if (has_specialization_constant(SpecName))
+      for (const device_image_plain &DeviceImage : MDeviceImages)
+        getSyclObjImpl(DeviceImage)
+            ->set_specialization_constant_raw_value(SpecName, Value);
+    else {
+      const auto *DataPtr = static_cast<const unsigned char *>(Value);
+      std::vector<unsigned char> &Val = MSpecConstValues[std::string{SpecName}];
+      Val.resize(Size);
+      Val.insert(Val.begin(), DataPtr, DataPtr + Size);
+    }
   }
 
   void get_specialization_constant_raw_value(const char *SpecName,
@@ -363,19 +442,36 @@ public:
             ->get_specialization_constant_raw_value(SpecName, ValueRet);
         return;
       }
+
+    // Specialization constant wasn't found in any of the device images,
+    // try to fetch value from kernel_bundle.
+    if (MSpecConstValues.count(std::string{SpecName}) != 0) {
+      const std::vector<unsigned char> &Val =
+          MSpecConstValues.at(std::string{SpecName});
+      auto *Dest = static_cast<unsigned char *>(ValueRet);
+      std::uninitialized_copy(Val.begin(), Val.end(), Dest);
+      return;
+    }
+
+    assert(false &&
+           "get_specialization_constant_raw_value called for missing constant");
   }
 
   bool is_specialization_constant_set(const char *SpecName) const noexcept {
-    return std::any_of(MDeviceImages.begin(), MDeviceImages.end(),
-                       [SpecName](const device_image_plain &DeviceImage) {
-                         return getSyclObjImpl(DeviceImage)
-                             ->is_specialization_constant_set(SpecName);
-                       });
+    bool SetInDevImg =
+        std::any_of(MDeviceImages.begin(), MDeviceImages.end(),
+                    [SpecName](const device_image_plain &DeviceImage) {
+                      return getSyclObjImpl(DeviceImage)
+                          ->is_specialization_constant_set(SpecName);
+                    });
+    return SetInDevImg || MSpecConstValues.count(std::string{SpecName}) != 0;
   }
 
-  const device_image_plain *begin() const { return &MDeviceImages.front(); }
+  const device_image_plain *begin() const { return MDeviceImages.data(); }
 
-  const device_image_plain *end() const { return &MDeviceImages.back() + 1; }
+  const device_image_plain *end() const {
+    return MDeviceImages.data() + MDeviceImages.size();
+  }
 
   size_t size() const noexcept { return MDeviceImages.size(); }
 
@@ -386,10 +482,20 @@ public:
                : detail::getSyclObjImpl(MDeviceImages[0])->get_state();
   }
 
+  const SpecConstMapT &get_spec_const_map_ref() const noexcept {
+    return MSpecConstValues;
+  }
+
+  bool isInterop() const { return MIsInterop; }
+
 private:
   context MContext;
   std::vector<device> MDevices;
   std::vector<device_image_plain> MDeviceImages;
+  // This map stores values for specialization constants, that are missing
+  // from any device image.
+  SpecConstMapT MSpecConstValues;
+  bool MIsInterop = false;
 };
 
 } // namespace detail

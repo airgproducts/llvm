@@ -311,27 +311,15 @@ public:
   /// Go through the uses list for this definition and make each use point
   /// to "V" if the callback ShouldReplace returns true for the given Use.
   /// Unlike replaceAllUsesWith() this function does not support basic block
-  /// values or constant users.
+  /// values.
   void replaceUsesWithIf(Value *New,
-                         llvm::function_ref<bool(Use &U)> ShouldReplace) {
-    assert(New && "Value::replaceUsesWithIf(<null>) is invalid!");
-    assert(New->getType() == getType() &&
-           "replaceUses of value with new value of different type!");
-
-    for (use_iterator UI = use_begin(), E = use_end(); UI != E;) {
-      Use &U = *UI;
-      ++UI;
-      if (!ShouldReplace(U))
-        continue;
-      U.set(New);
-    }
-  }
+                         llvm::function_ref<bool(Use &U)> ShouldReplace);
 
   /// replaceUsesOutsideBlock - Go through the uses list for this definition and
   /// make each use point to "V" instead of "this" when the use is outside the
   /// block. 'This's use list is expected to have at least one element.
   /// Unlike replaceAllUsesWith() this function does not support basic block
-  /// values or constant users.
+  /// values.
   void replaceUsesOutsideBlock(Value *V, BasicBlock *BB);
 
   //----------------------------------------------------------------------
@@ -466,12 +454,16 @@ public:
 
   /// Return true if there is exactly one use of this value that cannot be
   /// dropped.
-  ///
-  /// This is specialized because it is a common request and does not require
-  /// traversing the whole use list.
   Use *getSingleUndroppableUse();
   const Use *getSingleUndroppableUse() const {
     return const_cast<Value *>(this)->getSingleUndroppableUse();
+  }
+
+  /// Return true if there is exactly one unique user of this value that cannot be
+  /// dropped (that user can have multiple uses of this value).
+  User *getUniqueUndroppableUser();
+  const User *getUniqueUndroppableUser() const {
+    return const_cast<Value *>(this)->getUniqueUndroppableUser();
   }
 
   /// Return true if there this value.
@@ -564,6 +556,9 @@ public:
 
   /// Return true if there is metadata referencing this value.
   bool isUsedByMetadata() const { return IsUsedByMD; }
+
+  // Return true if this value is only transitively referenced by metadata.
+  bool isTransitiveUsedByMetadataOnly() const;
 
 protected:
   /// Get the current metadata attachments for the given kind, if any.
@@ -790,8 +785,8 @@ public:
   ///
   /// This is the greatest alignment value supported by load, store, and alloca
   /// instructions, and global values.
-  static const unsigned MaxAlignmentExponent = 29;
-  static const unsigned MaximumAlignment = 1u << MaxAlignmentExponent;
+  static constexpr unsigned MaxAlignmentExponent = 32;
+  static constexpr uint64_t MaximumAlignment = 1ULL << MaxAlignmentExponent;
 
   /// Mutate the type of this Value to be of the specified type.
   ///

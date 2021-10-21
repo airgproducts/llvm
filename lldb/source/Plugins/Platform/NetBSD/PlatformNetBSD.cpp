@@ -9,7 +9,7 @@
 #include "PlatformNetBSD.h"
 #include "lldb/Host/Config.h"
 
-#include <stdio.h>
+#include <cstdio>
 #if LLDB_ENABLE_POSIX
 #include <sys/utsname.h>
 #endif
@@ -80,10 +80,6 @@ const char *PlatformNetBSD::GetPluginDescriptionStatic(bool is_host) {
     return "Local NetBSD user platform plug-in.";
   else
     return "Remote NetBSD user platform plug-in.";
-}
-
-ConstString PlatformNetBSD::GetPluginName() {
-  return GetPluginNameStatic(IsHost());
 }
 
 void PlatformNetBSD::Initialize() {

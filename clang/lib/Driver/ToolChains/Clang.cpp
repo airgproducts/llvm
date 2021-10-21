@@ -20,10 +20,10 @@
 #include "Arch/X86.h"
 #include "CommonArgs.h"
 #include "Hexagon.h"
-#include "InputInfo.h"
 #include "MSP430.h"
 #include "PS4CPU.h"
 #include "SYCL.h"
+#include "clang/Basic/CLWarnings.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/LangOptions.h"
@@ -32,6 +32,7 @@
 #include "clang/Basic/Version.h"
 #include "clang/Driver/Distro.h"
 #include "clang/Driver/DriverDiagnostic.h"
+#include "clang/Driver/InputInfo.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/SanitizerArgs.h"
 #include "clang/Driver/XRayArgs.h"
@@ -40,6 +41,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/FileSystem.h"
@@ -55,8 +57,9 @@ using namespace clang;
 using namespace llvm::opt;
 
 static void CheckPreprocessingOptions(const Driver &D, const ArgList &Args) {
-  if (Arg *A =
-          Args.getLastArg(clang::driver::options::OPT_C, options::OPT_CC)) {
+  if (Arg *A = Args.getLastArg(clang::driver::options::OPT_C, options::OPT_CC,
+                               options::OPT_fminimize_whitespace,
+                               options::OPT_fno_minimize_whitespace)) {
     if (!Args.hasArg(options::OPT_E) && !Args.hasArg(options::OPT__SLASH_P) &&
         !Args.hasArg(options::OPT__SLASH_EP) && !D.CCCIsCPP()) {
       D.Diag(clang::diag::err_drv_argument_only_allowed_with)
@@ -354,7 +357,7 @@ static void getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_32:
   case llvm::Triple::aarch64_be:
-    aarch64::getAArch64TargetFeatures(D, Triple, Args, Features);
+    aarch64::getAArch64TargetFeatures(D, Triple, Args, Features, ForAS);
     break;
   case llvm::Triple::x86:
   case llvm::Triple::x86_64:
@@ -429,12 +432,21 @@ static bool addExceptionArgs(const ArgList &Args, types::ID InputType,
     Args.ClaimAllArgs(options::OPT_fno_objc_exceptions);
     Args.ClaimAllArgs(options::OPT_fcxx_exceptions);
     Args.ClaimAllArgs(options::OPT_fno_cxx_exceptions);
+    Args.ClaimAllArgs(options::OPT_fasync_exceptions);
+    Args.ClaimAllArgs(options::OPT_fno_async_exceptions);
     return false;
   }
 
   // See if the user explicitly enabled exceptions.
   bool EH = Args.hasFlag(options::OPT_fexceptions, options::OPT_fno_exceptions,
                          false);
+
+  bool EHa = Args.hasFlag(options::OPT_fasync_exceptions,
+                          options::OPT_fno_async_exceptions, false);
+  if (EHa) {
+    CmdArgs.push_back("-fasync-exceptions");
+    EH = true;
+  }
 
   // Obj-C exceptions are enabled by default, regardless of -fexceptions. This
   // is not necessarily sensible, but follows GCC.
@@ -491,14 +503,6 @@ static bool ShouldEnableAutolink(const ArgList &Args, const ToolChain &TC,
                       Default);
 }
 
-static bool ShouldDisableDwarfDirectory(const ArgList &Args,
-                                        const ToolChain &TC) {
-  bool UseDwarfDirectory =
-      Args.hasFlag(options::OPT_fdwarf_directory_asm,
-                   options::OPT_fno_dwarf_directory_asm, TC.useIntegratedAs());
-  return !UseDwarfDirectory;
-}
-
 // Convert an arg of the form "-gN" or "-ggdbN" or one of their aliases
 // to the corresponding DebugInfoKind.
 static codegenoptions::DebugInfoKind DebugLevelToInfoKind(const Arg &A) {
@@ -512,7 +516,7 @@ static codegenoptions::DebugInfoKind DebugLevelToInfoKind(const Arg &A) {
     return codegenoptions::DebugLineTablesOnly;
   if (A.getOption().matches(options::OPT_gline_directives_only))
     return codegenoptions::DebugDirectivesOnly;
-  return codegenoptions::LimitedDebugInfo;
+  return codegenoptions::DebugInfoConstructor;
 }
 
 static bool mustUseNonLeafFramePointerForTarget(const llvm::Triple &Triple) {
@@ -800,6 +804,15 @@ static void addPGOAndCoverageFlags(const ToolChain &TC, Compilation &C,
     D.Diag(diag::err_drv_argument_not_allowed_with)
         << CSPGOGenerateArg->getSpelling() << PGOGenerateArg->getSpelling();
     PGOGenerateArg = nullptr;
+  }
+
+  if (TC.getTriple().isOSAIX()) {
+    if (ProfileGenerateArg)
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << ProfileGenerateArg->getSpelling() << TC.getTriple().str();
+    if (Arg *ProfileSampleUseArg = getLastProfileSampleUseArg(Args))
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << ProfileSampleUseArg->getSpelling() << TC.getTriple().str();
   }
 
   if (ProfileGenerateArg) {
@@ -1124,11 +1137,29 @@ static const char *RelocationModelName(llvm::Reloc::Model Model) {
 static void handleAMDGPUCodeObjectVersionOptions(const Driver &D,
                                                  const ArgList &Args,
                                                  ArgStringList &CmdArgs) {
-  unsigned CodeObjVer = getOrCheckAMDGPUCodeObjectVersion(D, Args);
-  CmdArgs.insert(CmdArgs.begin() + 1,
-                 Args.MakeArgString(Twine("--amdhsa-code-object-version=") +
-                                    Twine(CodeObjVer)));
-  CmdArgs.insert(CmdArgs.begin() + 1, "-mllvm");
+  // If no version was requested by the user, use the default value from the
+  // back end. This is consistent with the value returned from
+  // getAMDGPUCodeObjectVersion. This lets clang emit IR for amdgpu without
+  // requiring the corresponding llvm to have the AMDGPU target enabled,
+  // provided the user (e.g. front end tests) can use the default.
+  if (haveAMDGPUCodeObjectVersionArgument(D, Args)) {
+    unsigned CodeObjVer = getAMDGPUCodeObjectVersion(D, Args);
+    CmdArgs.insert(CmdArgs.begin() + 1,
+                   Args.MakeArgString(Twine("--amdhsa-code-object-version=") +
+                                      Twine(CodeObjVer)));
+    CmdArgs.insert(CmdArgs.begin() + 1, "-mllvm");
+  }
+}
+
+/// Check whether the given input tree contains any append footer actions
+static bool ContainsAppendFooterAction(const Action *A) {
+  if (isa<AppendFooterJobAction>(A))
+    return true;
+  for (const auto &AI : A->inputs())
+    if (ContainsAppendFooterAction(AI))
+      return true;
+
+  return false;
 }
 
 void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
@@ -1168,6 +1199,12 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
     C.getDriver().addFPGATempDepFile(DepFile, BaseName);
   };
 
+  // Do not add dependency generation information when compiling the source +
+  // footer combination.  The dependency generation is done in a separate
+  // compile step so we can retain original source information.
+  if (ContainsAppendFooterAction(&JA))
+    ArgM = nullptr;
+
   if (ArgM) {
     // Determine the output location.
     const char *DepFile;
@@ -1181,6 +1218,12 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
             DepFile, Clang::getBaseInputName(Args, Inputs[0]));
     } else if (Output.getType() == types::TY_Dependencies) {
       DepFile = Output.getFilename();
+      if (!ContainsAppendFooterAction(&JA) && Args.hasArg(options::OPT_fsycl) &&
+          !Args.hasArg(options::OPT_fno_sycl_use_footer) &&
+          !JA.isDeviceOffloading(Action::OFK_SYCL))
+        // Name the dependency file for the specific dependency generation
+        // step created for the integration footer enabled compilation.
+        DepFile = getDependencyFileName(Args, Inputs);
     } else if (!ArgMD) {
       DepFile = "-";
     } else if (IsIntelFPGA && JA.isDeviceOffloading(Action::OFK_SYCL)) {
@@ -1279,7 +1322,8 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
   // If we are offloading to a target via OpenMP we need to include the
   // openmp_wrappers folder which contains alternative system headers.
   if (JA.isDeviceOffloading(Action::OFK_OpenMP) &&
-      getToolChain().getTriple().isNVPTX()){
+      (getToolChain().getTriple().isNVPTX() ||
+       getToolChain().getTriple().isAMDGCN())) {
     if (!Args.hasArg(options::OPT_nobuiltininc)) {
       // Add openmp_wrappers/* to our system include path.  This lets us wrap
       // standard library headers.
@@ -1382,6 +1426,24 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
     // Not translated, render as usual.
     A->claim();
     A->render(Args, CmdArgs);
+  }
+
+  // The file being compiled that contains the integration footer is not being
+  // compiled in the directory of the original source.  Add that directory
+  // as an -iquote option so we can properly find potential user headers there.
+  // The original source search directory should also be placed before any user
+  // search directories.
+  if (ContainsAppendFooterAction(&JA)) {
+    SmallString<128> SourcePath(Inputs[0].getBaseInput());
+    llvm::sys::path::remove_filename(SourcePath);
+    if (!SourcePath.empty()) {
+      CmdArgs.push_back("-iquote");
+      CmdArgs.push_back(Args.MakeArgString(SourcePath));
+    } else if (llvm::ErrorOr<std::string> CWD =
+                   D.getVFS().getCurrentWorkingDirectory()) {
+      CmdArgs.push_back("-iquote");
+      CmdArgs.push_back(Args.MakeArgString(*CWD));
+    }
   }
 
   Args.AddAllArgs(CmdArgs,
@@ -1610,8 +1672,8 @@ void AddAAPCSVolatileBitfieldArgs(const ArgList &Args, ArgStringList &CmdArgs) {
 }
 
 namespace {
-void RenderARMABI(const llvm::Triple &Triple, const ArgList &Args,
-                  ArgStringList &CmdArgs) {
+void RenderARMABI(const Driver &D, const llvm::Triple &Triple,
+                  const ArgList &Args, ArgStringList &CmdArgs) {
   // Select the ABI to use.
   // FIXME: Support -meabi.
   // FIXME: Parts of this are duplicated in the backend, unify this somehow.
@@ -1619,7 +1681,7 @@ void RenderARMABI(const llvm::Triple &Triple, const ArgList &Args,
   if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ)) {
     ABIName = A->getValue();
   } else {
-    std::string CPU = getCPUName(Args, Triple, /*FromAs*/ false);
+    std::string CPU = getCPUName(D, Args, Triple, /*FromAs*/ false);
     ABIName = llvm::ARM::computeDefaultTargetABI(Triple, CPU).data();
   }
 
@@ -1630,7 +1692,7 @@ void RenderARMABI(const llvm::Triple &Triple, const ArgList &Args,
 
 void Clang::AddARMTargetArgs(const llvm::Triple &Triple, const ArgList &Args,
                              ArgStringList &CmdArgs, bool KernelOrKext) const {
-  RenderARMABI(Triple, Args, CmdArgs);
+  RenderARMABI(getToolChain().getDriver(), Triple, Args, CmdArgs);
 
   // Determine floating point ABI from the options & target defaults.
   arm::FloatABI ABI = arm::getARMFloatABI(getToolChain(), Args);
@@ -2079,7 +2141,7 @@ static void SetRISCVSmallDataLimit(const ToolChain &TC, const ArgList &Args,
       D.Diag(diag::warn_drv_unsupported_sdata);
     }
   } else if (Args.getLastArgValue(options::OPT_mcmodel_EQ)
-                 .equals_lower("large") &&
+                 .equals_insensitive("large") &&
              (Triple.getArch() == llvm::Triple::riscv64)) {
     // Not support linker relaxation for RV64 with large code model.
     SmallDataLimit = "0";
@@ -2396,15 +2458,15 @@ void Clang::DumpCompilationDatabaseFragmentToDir(
   DumpCompilationDatabase(C, "", Target, Output, Input, Args);
 }
 
-static bool AddARMImplicitITArgs(const ArgList &Args, ArgStringList &CmdArgs,
+static bool CheckARMImplicitITArg(StringRef Value) {
+  return Value == "always" || Value == "never" || Value == "arm" ||
+         Value == "thumb";
+}
+
+static void AddARMImplicitITArgs(const ArgList &Args, ArgStringList &CmdArgs,
                                  StringRef Value) {
-  if (Value == "always" || Value == "never" || Value == "arm" ||
-      Value == "thumb") {
-    CmdArgs.push_back("-mllvm");
-    CmdArgs.push_back(Args.MakeArgString("-arm-implicit-it=" + Value));
-    return true;
-  }
-  return false;
+  CmdArgs.push_back("-mllvm");
+  CmdArgs.push_back(Args.MakeArgString("-arm-implicit-it=" + Value));
 }
 
 static void CollectArgsForIntegratedAssembler(Compilation &C,
@@ -2423,22 +2485,6 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
                    DefaultIncrementalLinkerCompatible))
     CmdArgs.push_back("-mincremental-linker-compatible");
 
-  switch (C.getDefaultToolChain().getArch()) {
-  case llvm::Triple::arm:
-  case llvm::Triple::armeb:
-  case llvm::Triple::thumb:
-  case llvm::Triple::thumbeb:
-    if (Arg *A = Args.getLastArg(options::OPT_mimplicit_it_EQ)) {
-      StringRef Value = A->getValue();
-      if (!AddARMImplicitITArgs(Args, CmdArgs, Value))
-        D.Diag(diag::err_drv_unsupported_option_argument)
-            << A->getOption().getName() << Value;
-    }
-    break;
-  default:
-    break;
-  }
-
   // If you add more args here, also add them to the block below that
   // starts with "// If CollectArgsForIntegratedAssembler() isn't called below".
 
@@ -2452,9 +2498,28 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
   bool UseRelaxRelocations = C.getDefaultToolChain().useRelaxRelocations();
   bool UseNoExecStack = C.getDefaultToolChain().isNoExecStackDefault();
   const char *MipsTargetFeature = nullptr;
+  StringRef ImplicitIt;
   for (const Arg *A :
-       Args.filtered(options::OPT_Wa_COMMA, options::OPT_Xassembler)) {
+       Args.filtered(options::OPT_Wa_COMMA, options::OPT_Xassembler,
+                     options::OPT_mimplicit_it_EQ)) {
     A->claim();
+
+    if (A->getOption().getID() == options::OPT_mimplicit_it_EQ) {
+      switch (C.getDefaultToolChain().getArch()) {
+      case llvm::Triple::arm:
+      case llvm::Triple::armeb:
+      case llvm::Triple::thumb:
+      case llvm::Triple::thumbeb:
+        // Only store the value; the last value set takes effect.
+        ImplicitIt = A->getValue();
+        if (!CheckARMImplicitITArg(ImplicitIt))
+          D.Diag(diag::err_drv_unsupported_option_argument)
+              << A->getOption().getName() << ImplicitIt;
+        continue;
+      default:
+        break;
+      }
+    }
 
     for (StringRef Value : A->getValues()) {
       if (TakeNextArg) {
@@ -2474,9 +2539,12 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
       case llvm::Triple::thumbeb:
       case llvm::Triple::arm:
       case llvm::Triple::armeb:
-        if (Value.startswith("-mimplicit-it=") &&
-            AddARMImplicitITArgs(Args, CmdArgs, Value.split("=").second))
-          continue;
+        if (Value.startswith("-mimplicit-it=")) {
+          // Only store the value; the last value set takes effect.
+          ImplicitIt = Value.split("=").second;
+          if (CheckARMImplicitITArg(ImplicitIt))
+            continue;
+        }
         if (Value == "-mthumb")
           // -mthumb has already been processed in ComputeLLVMTriple()
           // recognize but skip over here.
@@ -2562,7 +2630,7 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
           CmdArgs.push_back(Value.data());
         } else {
           RenderDebugEnablingArgs(Args, CmdArgs,
-                                  codegenoptions::LimitedDebugInfo,
+                                  codegenoptions::DebugInfoConstructor,
                                   DwarfVersion, llvm::DebuggerKind::Default);
         }
       } else if (Value.startswith("-mcpu") || Value.startswith("-mfpu") ||
@@ -2606,6 +2674,8 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
       }
     }
   }
+  if (ImplicitIt.size())
+    AddARMImplicitITArgs(Args, CmdArgs, ImplicitIt);
   if (UseRelaxRelocations)
     CmdArgs.push_back("--mrelax-relocations");
   if (UseNoExecStack)
@@ -2632,6 +2702,7 @@ static void RenderFloatingPointOptions(const ToolChain &TC, const Driver &D,
   // LLVM flags based on the final state.
   bool HonorINFs = true;
   bool HonorNaNs = true;
+  bool ApproxFunc = false;
   // -fmath-errno is the default on some platforms, e.g. BSD-derived OSes.
   bool MathErrno = TC.IsMathErrnoDefault();
   bool AssociativeMath = false;
@@ -2736,6 +2807,8 @@ static void RenderFloatingPointOptions(const ToolChain &TC, const Driver &D,
     case options::OPT_fno_honor_infinities: HonorINFs = false;        break;
     case options::OPT_fhonor_nans:          HonorNaNs = true;         break;
     case options::OPT_fno_honor_nans:       HonorNaNs = false;        break;
+    case options::OPT_fapprox_func:         ApproxFunc = true;        break;
+    case options::OPT_fno_approx_func:      ApproxFunc = false;       break;
     case options::OPT_fmath_errno:          MathErrno = true;         break;
     case options::OPT_fno_math_errno:       MathErrno = false;        break;
     case options::OPT_fassociative_math:    AssociativeMath = true;   break;
@@ -2930,6 +3003,9 @@ static void RenderFloatingPointOptions(const ToolChain &TC, const Driver &D,
 
   if (!HonorNaNs)
     CmdArgs.push_back("-menable-no-nans");
+
+  if (ApproxFunc)
+    CmdArgs.push_back("-fapprox-func");
 
   if (MathErrno)
     CmdArgs.push_back("-fmath-errno");
@@ -3141,18 +3217,20 @@ static void RenderSSPOptions(const Driver &D, const ToolChain &TC,
     }
   }
 
-  // First support "tls" and "global" for X86 target.
-  // TODO: Support "sysreg" for AArch64.
   const std::string &TripleStr = EffectiveTriple.getTriple();
   if (Arg *A = Args.getLastArg(options::OPT_mstack_protector_guard_EQ)) {
     StringRef Value = A->getValue();
     if (!EffectiveTriple.isX86() && !EffectiveTriple.isAArch64())
       D.Diag(diag::err_drv_unsupported_opt_for_target)
           << A->getAsString(Args) << TripleStr;
-    if (Value != "tls" && Value != "global") {
+    if (EffectiveTriple.isX86() && Value != "tls" && Value != "global") {
       D.Diag(diag::err_drv_invalid_value_with_suggestion)
-      << A->getOption().getName() << Value
-      << "valid arguments to '-mstack-protector-guard=' are:tls global";
+          << A->getOption().getName() << Value << "tls global";
+      return;
+    }
+    if (EffectiveTriple.isAArch64() && Value != "sysreg" && Value != "global") {
+      D.Diag(diag::err_drv_invalid_value_with_suggestion)
+          << A->getOption().getName() << Value << "sysreg global";
       return;
     }
     A->render(Args, CmdArgs);
@@ -3160,10 +3238,10 @@ static void RenderSSPOptions(const Driver &D, const ToolChain &TC,
 
   if (Arg *A = Args.getLastArg(options::OPT_mstack_protector_guard_offset_EQ)) {
     StringRef Value = A->getValue();
-    if (!EffectiveTriple.isX86())
+    if (!EffectiveTriple.isX86() && !EffectiveTriple.isAArch64())
       D.Diag(diag::err_drv_unsupported_opt_for_target)
           << A->getAsString(Args) << TripleStr;
-    unsigned Offset;
+    int Offset;
     if (Value.getAsInteger(10, Offset)) {
       D.Diag(diag::err_drv_invalid_value) << A->getOption().getName() << Value;
       return;
@@ -3173,13 +3251,16 @@ static void RenderSSPOptions(const Driver &D, const ToolChain &TC,
 
   if (Arg *A = Args.getLastArg(options::OPT_mstack_protector_guard_reg_EQ)) {
     StringRef Value = A->getValue();
-    if (!EffectiveTriple.isX86())
+    if (!EffectiveTriple.isX86() && !EffectiveTriple.isAArch64())
       D.Diag(diag::err_drv_unsupported_opt_for_target)
           << A->getAsString(Args) << TripleStr;
     if (EffectiveTriple.isX86() && (Value != "fs" && Value != "gs")) {
       D.Diag(diag::err_drv_invalid_value_with_suggestion)
-      << A->getOption().getName() << Value
-      << "for X86, valid arguments to '-mstack-protector-guard-reg=' are:fs gs";
+          << A->getOption().getName() << Value << "fs gs";
+      return;
+    }
+    if (EffectiveTriple.isAArch64() && Value != "sp_el0") {
+      D.Diag(diag::err_drv_invalid_value) << A->getOption().getName() << Value;
       return;
     }
     A->render(Args, CmdArgs);
@@ -3190,7 +3271,7 @@ static void RenderSCPOptions(const ToolChain &TC, const ArgList &Args,
                              ArgStringList &CmdArgs) {
   const llvm::Triple &EffectiveTriple = TC.getEffectiveTriple();
 
-  if (!EffectiveTriple.isOSLinux())
+  if (!EffectiveTriple.isOSFreeBSD() && !EffectiveTriple.isOSLinux())
     return;
 
   if (!EffectiveTriple.isX86() && !EffectiveTriple.isSystemZ() &&
@@ -3289,7 +3370,8 @@ static void RenderOpenCLOptions(const ArgList &Args, ArgStringList &CmdArgs,
       CmdArgs.push_back(Args.MakeArgString(A->getOption().getPrefixedName()));
 
   // Only add the default headers if we are compiling OpenCL sources.
-  if ((types::isOpenCL(InputType) || Args.hasArg(options::OPT_cl_std_EQ)) &&
+  if ((types::isOpenCL(InputType) ||
+       (Args.hasArg(options::OPT_cl_std_EQ) && types::isSrcFile(InputType))) &&
       !Args.hasArg(options::OPT_cl_no_stdinc)) {
     CmdArgs.push_back("-finclude-default-header");
     CmdArgs.push_back("-fdeclare-opencl-builtins");
@@ -3883,12 +3965,6 @@ static void renderDebugOptions(const ToolChain &TC, const Driver &D,
                                ArgStringList &CmdArgs,
                                codegenoptions::DebugInfoKind &DebugInfoKind,
                                DwarfFissionKind &DwarfFission) {
-  // These two forms of profiling info can't be used together.
-  if (const Arg *A1 = Args.getLastArg(options::OPT_fpseudo_probe_for_profiling))
-    if (const Arg *A2 = Args.getLastArg(options::OPT_fdebug_info_for_profiling))
-      D.Diag(diag::err_drv_argument_not_allowed_with)
-          << A1->getAsString(Args) << A2->getAsString(Args);
-
   if (Args.hasFlag(options::OPT_fdebug_info_for_profiling,
                    options::OPT_fno_debug_info_for_profiling, false) &&
       checkDebugInfoOption(
@@ -3923,7 +3999,7 @@ static void renderDebugOptions(const ToolChain &TC, const Driver &D,
     }
   }
   if (const Arg *A = Args.getLastArg(options::OPT_g_Group)) {
-    DebugInfoKind = codegenoptions::LimitedDebugInfo;
+    DebugInfoKind = codegenoptions::DebugInfoConstructor;
 
     // If the last option explicitly specified a debug-info level, use it.
     if (checkDebugInfoOption(A, Args, D, TC) &&
@@ -4014,7 +4090,14 @@ static void renderDebugOptions(const ToolChain &TC, const Driver &D,
       DebugInfoKind == codegenoptions::DebugDirectivesOnly)
     DebugInfoKind = codegenoptions::NoDebugInfo;
 
-  // We ignore flag -gstrict-dwarf for now.
+  // strict DWARF is set to false by default. But for DBX, we need it to be set
+  // as true by default.
+  if (const Arg *A = Args.getLastArg(options::OPT_gstrict_dwarf))
+    (void)checkDebugInfoOption(A, Args, D, TC);
+  if (Args.hasFlag(options::OPT_gstrict_dwarf, options::OPT_gno_strict_dwarf,
+                   DebuggerTuning == llvm::DebuggerKind::DBX))
+    CmdArgs.push_back("-gstrict-dwarf");
+
   // And we handle flag -grecord-gcc-switches later with DWARFDebugFlags.
   Args.ClaimAllArgs(options::OPT_g_flags_Group);
 
@@ -4038,7 +4121,7 @@ static void renderDebugOptions(const ToolChain &TC, const Driver &D,
     if (checkDebugInfoOption(A, Args, D, TC)) {
       if (DebugInfoKind != codegenoptions::DebugLineTablesOnly &&
           DebugInfoKind != codegenoptions::DebugDirectivesOnly) {
-        DebugInfoKind = codegenoptions::LimitedDebugInfo;
+        DebugInfoKind = codegenoptions::DebugInfoConstructor;
         CmdArgs.push_back("-dwarf-ext-refs");
         CmdArgs.push_back("-fmodule-format=obj");
       }
@@ -4059,7 +4142,8 @@ static void renderDebugOptions(const ToolChain &TC, const Driver &D,
   if (const Arg *A = Args.getLastArg(options::OPT_fstandalone_debug))
     (void)checkDebugInfoOption(A, Args, D, TC);
 
-  if (DebugInfoKind == codegenoptions::LimitedDebugInfo) {
+  if (DebugInfoKind == codegenoptions::LimitedDebugInfo ||
+      DebugInfoKind == codegenoptions::DebugInfoConstructor) {
     if (Args.hasFlag(options::OPT_fno_eliminate_unused_debug_types,
                      options::OPT_feliminate_unused_debug_types, false))
       DebugInfoKind = codegenoptions::UnusedTypeInfo;
@@ -4134,6 +4218,29 @@ static void renderDebugOptions(const ToolChain &TC, const Driver &D,
                                            options::OPT_gpubnames)
                             ? "-gpubnames"
                             : "-ggnu-pubnames");
+  const auto *SimpleTemplateNamesArg =
+      Args.getLastArg(options::OPT_gsimple_template_names, options::OPT_gno_simple_template_names,
+                      options::OPT_gsimple_template_names_EQ);
+  bool ForwardTemplateParams = DebuggerTuning == llvm::DebuggerKind::SCE;
+  if (SimpleTemplateNamesArg &&
+      checkDebugInfoOption(SimpleTemplateNamesArg, Args, D, TC)) {
+    const auto &Opt = SimpleTemplateNamesArg->getOption();
+    if (Opt.matches(options::OPT_gsimple_template_names)) {
+      ForwardTemplateParams = true;
+      CmdArgs.push_back("-gsimple-template-names=simple");
+    } else if (Opt.matches(options::OPT_gsimple_template_names_EQ)) {
+      ForwardTemplateParams = true;
+      StringRef Value = SimpleTemplateNamesArg->getValue();
+      if (Value == "simple") {
+        CmdArgs.push_back("-gsimple-template-names=simple");
+      } else if (Value == "mangled") {
+        CmdArgs.push_back("-gsimple-template-names=mangled");
+      } else {
+        D.Diag(diag::err_drv_unsupported_option_argument)
+            << Opt.getName() << SimpleTemplateNamesArg->getValue();
+      }
+    }
+  }
 
   if (Args.hasFlag(options::OPT_fdebug_ranges_base_address,
                    options::OPT_fno_debug_ranges_base_address, false)) {
@@ -4170,9 +4277,17 @@ static void renderDebugOptions(const ToolChain &TC, const Driver &D,
     }
   }
 
+  // To avoid join/split of directory+filename, the integrated assembler prefers
+  // the directory form of .file on all DWARF versions. GNU as doesn't allow the
+  // form before DWARF v5.
+  if (!Args.hasFlag(options::OPT_fdwarf_directory_asm,
+                    options::OPT_fno_dwarf_directory_asm,
+                    TC.useIntegratedAs() || EffectiveDWARFVersion >= 5))
+    CmdArgs.push_back("-fno-dwarf-directory-asm");
+
   // Decide how to render forward declarations of template instantiations.
   // SCE wants full descriptions, others just get them in the name.
-  if (DebuggerTuning == llvm::DebuggerKind::SCE)
+  if (ForwardTemplateParams)
     CmdArgs.push_back("-debug-forward-template-params");
 
   // Do we need to explicitly import anonymous namespaces into the parent
@@ -4193,6 +4308,180 @@ static bool ContainsWrapperAction(const Action *A) {
       return true;
 
   return false;
+}
+
+// Put together an external compiler compilation call which is used instead
+// of the clang invocation for the host compile of an offload compilation.
+// Enabling command line:  clang++ -fsycl -fsycl-host-compiler=<HostExe>
+//                         <ClangOpts> -fsycl-host-compiler-options=<HostOpts>
+// Any <ClangOpts> used which are phase limiting (preprocessing, assembly,
+// object generation) are specifically handled here by specifying the
+// equivalent phase limiting option(s).
+// It is expected that any user <HostOpts> options passed will be placed
+// after any implied options set here.  This will have overriding behaviors
+// for any options which are considered to be evaluated from left to right.
+// Specifying any <HostOpts> option which conficts any of the implied options
+// will result in undefined behavior.  Potential conflicting options:
+//  * Output specification options (-o, -Fo, -Fa, etc)
+//  * Phase limiting options (-E, -c, -P, etc)
+void Clang::ConstructHostCompilerJob(Compilation &C, const JobAction &JA,
+                                     const InputInfo &Output,
+                                     const InputInfoList &Inputs,
+                                     const llvm::opt::ArgList &TCArgs) const {
+
+  // The Host compilation step that occurs here is constructed based on the
+  // input from the user.  This consists of the compiler to call and the
+  // options that will be used during the compilation.
+  ArgStringList HostCompileArgs;
+  const InputInfo &InputFile = Inputs.front();
+  const ToolChain &TC = getToolChain();
+
+  // Input file.
+  HostCompileArgs.push_back(InputFile.getFilename());
+
+  // When performing the host compilation, we are expecting to only be
+  // creating intermediate files, namely preprocessor output, assembly or
+  // object files.
+  // We are making assumptions in regards to what options are used to
+  // generate these intermediate files.
+  //                gcc/g++/clang/clang++/default | cl
+  //  Object:                   -c                | -c
+  //  Preprocessed:             -E                | -P -Fi<file>
+  //  Assembly:                 -S                | -c -Fa<file>
+  //  Header Input:        -include <file>        | -FI <file>
+  //
+  // The options used are determined by the compiler name and target triple.
+  Arg *HostCompilerDefArg =
+      TCArgs.getLastArg(options::OPT_fsycl_host_compiler_EQ);
+  assert(HostCompilerDefArg && "Expected host compiler designation.");
+
+  bool OutputAdded = false;
+  StringRef CompilerName =
+      llvm::sys::path::stem(HostCompilerDefArg->getValue());
+  if (CompilerName.empty())
+    TC.getDriver().Diag(diag::err_drv_missing_arg_mtp)
+        << HostCompilerDefArg->getAsString(TCArgs);
+  // FIXME: Consider requiring user input to specify a compatibility class
+  // to determine the type of host compiler being used.
+  SmallVector<StringRef, 4> MSVCCompilers = {"cl", "clang-cl", "icl"};
+  bool IsMSVCHostCompiler =
+      std::find(MSVCCompilers.begin(), MSVCCompilers.end(), CompilerName) !=
+      MSVCCompilers.end();
+
+  auto addMSVCOutputFile = [&](StringRef Opt) {
+    SmallString<128> OutOpt(Opt);
+    OutOpt += Output.getFilename();
+    HostCompileArgs.push_back(TCArgs.MakeArgString(OutOpt));
+    OutputAdded = true;
+  };
+  // FIXME: Reuse existing toolchains which are already supported to put
+  // together the options.
+  // FIXME: For any potential obscure host compilers that do not use the
+  // 'standard' set of options, we should provide a user interface that allows
+  // users to override the implied options.
+  if (isa<PreprocessJobAction>(JA)) {
+    if (IsMSVCHostCompiler) {
+      // Check the output file, if it is 'stdout' we want to use -E.
+      if (StringRef(Output.getFilename()).equals("-")) {
+        HostCompileArgs.push_back("-E");
+        OutputAdded = true;
+      } else {
+        HostCompileArgs.push_back("-P");
+        addMSVCOutputFile("-Fi");
+      }
+    } else
+      HostCompileArgs.push_back("-E");
+  } else if (isa<AssembleJobAction>(JA)) {
+    HostCompileArgs.push_back("-c");
+    if (IsMSVCHostCompiler)
+      addMSVCOutputFile("-Fo");
+  } else {
+    assert((isa<CompileJobAction, BackendJobAction>(JA)) &&
+           "Invalid action for external host compilation tool.");
+    if (JA.getType() == types::TY_PP_Asm) {
+      if (IsMSVCHostCompiler) {
+        HostCompileArgs.push_back("-c");
+        addMSVCOutputFile("-Fa");
+        // The MSVC Compiler does not have a way to just create the assembly
+        // file so we create the assembly file and object file, and redirect
+        // the object file to a temporary.
+        std::string ObjTmpName = C.getDriver().GetTemporaryPath("host", "obj");
+        StringRef WrapperFileName =
+            C.addTempFile(C.getArgs().MakeArgString(ObjTmpName));
+        SmallString<128> ObjOutOpt("-Fo");
+        ObjOutOpt += WrapperFileName;
+        HostCompileArgs.push_back(C.getArgs().MakeArgString(ObjOutOpt));
+      } else
+        HostCompileArgs.push_back("-S");
+    } else {
+      TC.getDriver().Diag(diag::err_drv_output_type_with_host_compiler);
+    }
+  }
+
+  // Add the integration header.
+  StringRef Header =
+      TC.getDriver().getIntegrationHeader(InputFile.getBaseInput());
+  if (types::getPreprocessedType(InputFile.getType()) != types::TY_INVALID &&
+      !Header.empty()) {
+    HostCompileArgs.push_back(IsMSVCHostCompiler ? "-FI" : "-include");
+    HostCompileArgs.push_back(TCArgs.MakeArgString(Header));
+  }
+
+  // Add directory in which the original source file resides, as there could
+  // be headers that need to be picked up from there.
+  SmallString<128> SourcePath(InputFile.getBaseInput());
+  llvm::sys::path::remove_filename(SourcePath);
+  if (!SourcePath.empty()) {
+    HostCompileArgs.push_back(IsMSVCHostCompiler ? "-I" : "-iquote");
+    HostCompileArgs.push_back(TCArgs.MakeArgString(SourcePath));
+  } else if (llvm::ErrorOr<std::string> CWD =
+                 TC.getDriver().getVFS().getCurrentWorkingDirectory()) {
+    HostCompileArgs.push_back(IsMSVCHostCompiler ? "-I" : "-iquote");
+    HostCompileArgs.push_back(TCArgs.MakeArgString(*CWD));
+  }
+
+  // Add default header search directories.
+  SmallString<128> BaseDir(C.getDriver().Dir);
+  llvm::sys::path::append(BaseDir, "..", "include");
+  SmallString<128> SYCLDir(BaseDir);
+  llvm::sys::path::append(SYCLDir, "sycl");
+  HostCompileArgs.push_back("-I");
+  HostCompileArgs.push_back(TCArgs.MakeArgString(SYCLDir));
+  HostCompileArgs.push_back("-I");
+  HostCompileArgs.push_back(TCArgs.MakeArgString(BaseDir));
+
+  if (!OutputAdded) {
+    // Add output file to the command line.  This is assumed to be prefaced
+    // with the '-o' option that is used to designate the output file.
+    HostCompileArgs.push_back("-o");
+    HostCompileArgs.push_back(Output.getFilename());
+  }
+
+  SmallString<128> ExecPath;
+  if (HostCompilerDefArg) {
+    ExecPath = HostCompilerDefArg->getValue();
+    if (!ExecPath.empty() && ExecPath == llvm::sys::path::stem(ExecPath))
+      ExecPath = TC.GetProgramPath(ExecPath.c_str());
+  }
+
+  // Add any user-specified arguments.
+  if (Arg *HostCompilerOptsArg =
+          TCArgs.getLastArg(options::OPT_fsycl_host_compiler_options_EQ)) {
+    SmallVector<const char *, 8> TargetArgs;
+    llvm::BumpPtrAllocator BPA;
+    llvm::StringSaver S(BPA);
+    // Tokenize the string.
+    llvm::cl::TokenizeGNUCommandLine(HostCompilerOptsArg->getValue(), S,
+                                     TargetArgs);
+    llvm::transform(TargetArgs, std::back_inserter(HostCompileArgs),
+                    [&TCArgs](StringRef A) { return TCArgs.MakeArgString(A); });
+  }
+  const Tool *T = TC.SelectTool(JA);
+  auto Cmd = std::make_unique<Command>(JA, *T, ResponseFileSupport::None(),
+                                       TCArgs.MakeArgString(ExecPath),
+                                       HostCompileArgs, None);
+
+  C.addCommand(std::move(Cmd));
 }
 
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
@@ -4219,7 +4508,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // of the module.
   // All other jobs are expected to have exactly one input.
   bool IsCuda = JA.isOffloading(Action::OFK_Cuda);
+  bool IsCudaDevice = JA.isDeviceOffloading(Action::OFK_Cuda);
   bool IsHIP = JA.isOffloading(Action::OFK_HIP);
+  bool IsHIPDevice = JA.isDeviceOffloading(Action::OFK_HIP);
   bool IsOpenMPDevice = JA.isDeviceOffloading(Action::OFK_OpenMP);
   bool IsSYCLOffloadDevice = JA.isDeviceOffloading(Action::OFK_SYCL);
   bool IsSYCL = JA.isOffloading(Action::OFK_SYCL);
@@ -4227,6 +4518,18 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   assert((IsCuda || IsHIP || (IsOpenMPDevice && Inputs.size() == 2) || IsSYCL ||
           IsHeaderModulePrecompile || Inputs.size() == 1) &&
          "Unable to handle multiple inputs.");
+
+  // Perform the SYCL host compilation using an external compiler if the user
+  // requested.
+  if (Args.hasArg(options::OPT_fsycl_host_compiler_EQ) && IsSYCL &&
+      !IsSYCLOffloadDevice) {
+    ConstructHostCompilerJob(C, JA, Output, Inputs, Args);
+    return;
+  }
+  bool IsDeviceOffloadAction = !(JA.isDeviceOffloading(Action::OFK_None) ||
+                                 JA.isDeviceOffloading(Action::OFK_Host));
+  bool IsUsingLTO = D.isUsingLTO(IsDeviceOffloadAction);
+  auto LTOMode = D.getLTOMode(IsDeviceOffloadAction);
 
   // A header module compilation doesn't have a main input file, so invent a
   // fake one as a placeholder.
@@ -4357,7 +4660,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
 
     // Turn on Dead Parameter Elimination Optimization with early optimizations
-    if (!RawTriple.isNVPTX() &&
+    if (!(RawTriple.isAMDGCN()) &&
         Args.hasFlag(options::OPT_fsycl_dead_args_optimization,
                      options::OPT_fno_sycl_dead_args_optimization, false))
       CmdArgs.push_back("-fenable-sycl-dae");
@@ -4366,13 +4669,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-fms-extensions");
       CmdArgs.push_back("-fms-compatibility");
       CmdArgs.push_back("-fdelayed-template-parsing");
-      VersionTuple MSVT = TC.computeMSVCVersion(&D, Args);
+      VersionTuple MSVT = C.getDefaultToolChain().computeMSVCVersion(&D, Args);
       if (!MSVT.empty())
         CmdArgs.push_back(Args.MakeArgString("-fms-compatibility-version=" +
                                              MSVT.getAsString()));
       else {
-        const char *LowestMSVCSupported =
-            "191025017"; // VS2017 v15.0 (initial release)
+        const char *LowestMSVCSupported = "19.16.27023"; // VS2017 v15.9
         CmdArgs.push_back(Args.MakeArgString(
             Twine("-fms-compatibility-version=") + LowestMSVCSupported));
       }
@@ -4382,6 +4684,15 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                      options::OPT_fno_sycl_allow_func_ptr, false)) {
       CmdArgs.push_back("-fsycl-allow-func-ptr");
     }
+
+    // Forward -fsycl-instrument-device-code option to cc1. This option will
+    // only be used for SPIR-V-based targets.
+    if (Arg *A =
+            Args.getLastArgNoClaim(options::OPT_fsycl_instrument_device_code))
+      if (Triple.isSPIR()) {
+        A->claim();
+        CmdArgs.push_back("-fsycl-instrument-device-code");
+      }
 
     if (!SYCLStdArg) {
       // The user had not pass SYCL version, thus we'll employ no-sycl-strict
@@ -4398,6 +4709,16 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back(Args.MakeArgString(HeaderOpt));
     }
 
+    if (!Args.hasArg(options::OPT_fno_sycl_use_footer)) {
+      // Add the integration footer option to generated the footer.
+      StringRef Footer(D.getIntegrationFooter(Input.getBaseInput()));
+      if (!Footer.empty()) {
+        SmallString<128> FooterOpt("-fsycl-int-footer=");
+        FooterOpt.append(Footer);
+        CmdArgs.push_back(Args.MakeArgString(FooterOpt));
+      }
+    }
+
     // Forward -fsycl-default-sub-group-size if in SYCL mode.
     Args.AddLastArg(CmdArgs, options::OPT_fsycl_default_sub_group_size);
   }
@@ -4412,23 +4733,40 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       SYCLStdArg->render(Args, CmdArgs);
       CmdArgs.push_back("-fsycl-std-layout-kernel-params");
     } else {
-      // Ensure the default version in SYCL mode is 2020
+      // Ensure the default version in SYCL mode is 2020.
       CmdArgs.push_back("-sycl-std=2020");
     }
-    if (Args.hasArg(options::OPT_fsycl_unnamed_lambda))
-      CmdArgs.push_back("-fsycl-unnamed-lambda");
 
-    // Enable generation of USM address spaces for FPGA.
-    // __ENABLE_USM_ADDR_SPACE__ will be used during compilation of SYCL headers
-    if (getToolChain().getTriple().getSubArch() ==
-        llvm::Triple::SPIRSubArch_fpga)
-      CmdArgs.push_back("-D__ENABLE_USM_ADDR_SPACE__");
+    if (!Args.hasFlag(options::OPT_fsycl_unnamed_lambda,
+                      options::OPT_fno_sycl_unnamed_lambda))
+      CmdArgs.push_back("-fno-sycl-unnamed-lambda");
+
+    // Add the Unique ID prefix
+    StringRef UniqueID = D.getSYCLUniqueID(Input.getBaseInput());
+    if (!UniqueID.empty())
+      CmdArgs.push_back(
+          Args.MakeArgString(Twine("-fsycl-unique-prefix=") + UniqueID));
+
+    // Disable parallel for range-rounding for anything involving FPGA
+    auto SYCLTCRange = C.getOffloadToolChains<Action::OFK_SYCL>();
+    bool HasFPGA = false;
+    for (auto TI = SYCLTCRange.first, TE = SYCLTCRange.second; TI != TE; ++TI)
+      if (TI->second->getTriple().getSubArch() ==
+          llvm::Triple::SPIRSubArch_fpga) {
+        HasFPGA = true;
+        break;
+      }
+    if (HasFPGA)
+      CmdArgs.push_back("-fsycl-disable-range-rounding");
 
     // Add any options that are needed specific to SYCL offload while
     // performing the host side compilation.
     if (!IsSYCLOffloadDevice) {
       // Add the -include option to add the integration header
       StringRef Header = D.getIntegrationHeader(Input.getBaseInput());
+      // Do not add the integration header if we are compiling after the
+      // integration footer has been applied.  Check for the append job
+      // action to determine this.
       if (types::getPreprocessedType(Input.getType()) != types::TY_INVALID &&
           !Header.empty()) {
         CmdArgs.push_back("-include");
@@ -4449,7 +4787,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         if (AuxT.isWindowsMSVCEnvironment()) {
           CmdArgs.push_back("-D_MT");
           CmdArgs.push_back("-D_DLL");
-          CmdArgs.push_back("--dependent-lib=msvcrt");
         }
       }
     }
@@ -4563,13 +4900,19 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-emit-llvm");
     } else if (JA.getType() == types::TY_LLVM_BC ||
                JA.getType() == types::TY_LTO_BC) {
-      CmdArgs.push_back("-emit-llvm-bc");
+      // Emit textual llvm IR for AMDGPU offloading for -emit-llvm -S
+      if (Triple.isAMDGCN() && IsOpenMPDevice && Args.hasArg(options::OPT_S) &&
+          Args.hasArg(options::OPT_emit_llvm)) {
+        CmdArgs.push_back("-emit-llvm");
+      } else {
+        CmdArgs.push_back("-emit-llvm-bc");
+      }
     } else if (JA.getType() == types::TY_IFS ||
                JA.getType() == types::TY_IFS_CPP) {
       StringRef ArgStr =
           Args.hasArg(options::OPT_interface_stub_version_EQ)
               ? Args.getLastArgValue(options::OPT_interface_stub_version_EQ)
-              : "experimental-ifs-v2";
+              : "ifs-v1";
       CmdArgs.push_back("-emit-interface-stubs");
       CmdArgs.push_back(
           Args.MakeArgString(Twine("-interface-stub-version=") + ArgStr.str()));
@@ -4596,13 +4939,20 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     if (JA.getType() == types::TY_LLVM_BC)
       CmdArgs.push_back("-emit-llvm-uselists");
 
-    // Device-side jobs do not support LTO.
-    bool isDeviceOffloadAction = !(JA.isDeviceOffloading(Action::OFK_None) ||
-                                   JA.isDeviceOffloading(Action::OFK_Host));
-
-    if (D.isUsingLTO() && !isDeviceOffloadAction) {
-      Args.AddLastArg(CmdArgs, options::OPT_flto, options::OPT_flto_EQ);
-      CmdArgs.push_back("-flto-unit");
+    if (IsUsingLTO) {
+      // Only AMDGPU supports device-side LTO.
+      if (IsDeviceOffloadAction && !Triple.isAMDGPU()) {
+        D.Diag(diag::err_drv_unsupported_opt_for_target)
+            << Args.getLastArg(options::OPT_foffload_lto,
+                               options::OPT_foffload_lto_EQ)
+                   ->getAsString(Args)
+            << Triple.getTriple();
+      } else {
+        assert(LTOMode == LTOK_Full || LTOMode == LTOK_Thin);
+        CmdArgs.push_back(Args.MakeArgString(
+            Twine("-flto=") + (LTOMode == LTOK_Thin ? "thin" : "full")));
+        CmdArgs.push_back("-flto-unit");
+      }
     }
   }
 
@@ -4627,7 +4977,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Embed-bitcode option.
   // Only white-listed flags below are allowed to be embedded.
-  if (C.getDriver().embedBitcodeInObject() && !C.getDriver().isUsingLTO() &&
+  if (C.getDriver().embedBitcodeInObject() && !IsUsingLTO &&
       (isa<BackendJobAction>(JA) || isa<AssembleJobAction>(JA))) {
     // Add flags implied by -fembed-bitcode.
     Args.AddLastArg(CmdArgs, options::OPT_fembed_bitcode_EQ);
@@ -4683,8 +5033,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         options::OPT_mllvm,
     };
     for (const auto &A : Args)
-      if (llvm::find(kBitcodeOptionBlacklist, A->getOption().getID()) !=
-          std::end(kBitcodeOptionBlacklist))
+      if (llvm::is_contained(kBitcodeOptionBlacklist, A->getOption().getID()))
         D.Diag(diag::err_drv_unsupported_embed_bitcode) << A->getSpelling();
 
     // Render the CodeGen options that need to be passed.
@@ -4701,7 +5050,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     case llvm::Triple::arm:
     case llvm::Triple::armeb:
     case llvm::Triple::thumbeb:
-      RenderARMABI(Triple, Args, CmdArgs);
+      RenderARMABI(D, Triple, Args, CmdArgs);
       break;
     case llvm::Triple::aarch64:
     case llvm::Triple::aarch64_32:
@@ -4744,7 +5093,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     return;
   }
 
-  if (C.getDriver().embedBitcodeMarkerOnly() && !C.getDriver().isUsingLTO())
+  if (C.getDriver().embedBitcodeMarkerOnly() && !IsUsingLTO)
     CmdArgs.push_back("-fembed-bitcode=marker");
 
   // We normally speed up the clang process a bit by skipping destructors at
@@ -4823,6 +5172,22 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(Args.MakeArgString(std::to_string(FunctionAlignment)));
   }
 
+  // We support -falign-loops=N where N is a power of 2. GCC supports more
+  // forms.
+  if (const Arg *A = Args.getLastArg(options::OPT_falign_loops_EQ)) {
+    unsigned Value = 0;
+    if (StringRef(A->getValue()).getAsInteger(10, Value) || Value > 65536)
+      TC.getDriver().Diag(diag::err_drv_invalid_int_value)
+          << A->getAsString(Args) << A->getValue();
+    else if (Value & (Value - 1))
+      TC.getDriver().Diag(diag::err_drv_alignment_not_power_of_two)
+          << A->getAsString(Args) << A->getValue();
+    // Treat =0 as unspecified (use the target preference).
+    if (Value)
+      CmdArgs.push_back(Args.MakeArgString("-falign-loops=" +
+                                           Twine(std::min(Value, 65536u))));
+  }
+
   llvm::Reloc::Model RelocationModel;
   unsigned PICLevel;
   bool IsPIE;
@@ -4885,7 +5250,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                              options::OPT_fno_semantic_interposition);
     if (RelocationModel != llvm::Reloc::Static && !IsPIE) {
       // The supported targets need to call AsmPrinter::getSymbolPreferLocal.
-      bool SupportsLocalAlias = Triple.isX86();
+      bool SupportsLocalAlias =
+          Triple.isAArch64() || Triple.isRISCV() || Triple.isX86();
       if (!A)
         CmdArgs.push_back("-fhalf-no-semantic-interposition");
       else if (A->getOption().matches(options::OPT_fsemantic_interposition))
@@ -4940,13 +5306,25 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     if (A->getOption().getID() == options::OPT_mabi_EQ_vec_extabi)
       CmdArgs.push_back("-mabi=vec-extabi");
     else
-      D.Diag(diag::err_aix_default_altivec_abi);
+      CmdArgs.push_back("-mabi=vec-default");
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_mlong_double_128)) {
+    // Emit the unsupported option error until the Clang's library integration
+    // support for 128-bit long double is available for AIX.
+    if (Triple.isOSAIX())
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << A->getSpelling() << RawTriple.str();
   }
 
   if (Arg *A = Args.getLastArg(options::OPT_Wframe_larger_than_EQ)) {
     StringRef v = A->getValue();
-    CmdArgs.push_back("-mllvm");
-    CmdArgs.push_back(Args.MakeArgString("-warn-stack-size=" + v));
+    // FIXME: Validate the argument here so we don't produce meaningless errors
+    // about -fwarn-stack-size=.
+    if (v.empty())
+      D.Diag(diag::err_drv_missing_argument) << A->getSpelling() << 1;
+    else
+      CmdArgs.push_back(Args.MakeArgString("-fwarn-stack-size=" + v));
     A->claim();
   }
 
@@ -5073,7 +5451,26 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    false))
     CmdArgs.push_back("-fsplit-stack");
 
+  // -fprotect-parens=0 is default.
+  if (Args.hasFlag(options::OPT_fprotect_parens,
+                   options::OPT_fno_protect_parens, false))
+    CmdArgs.push_back("-fprotect-parens");
+
   RenderFloatingPointOptions(TC, D, OFastEnabled, Args, CmdArgs, JA);
+
+  if (Arg *A = Args.getLastArg(options::OPT_fextend_args_EQ)) {
+    const llvm::Triple::ArchType Arch = TC.getArch();
+    if (Arch == llvm::Triple::x86 || Arch == llvm::Triple::x86_64) {
+      StringRef V = A->getValue();
+      if (V == "64")
+        CmdArgs.push_back("-fextend-arguments=64");
+      else if (V != "32")
+        D.Diag(diag::err_drv_invalid_argument_to_option)
+            << A->getValue() << A->getOption().getName();
+    } else
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << A->getOption().getName() << TripleStr;
+  }
 
   if (Arg *A = Args.getLastArg(options::OPT_mdouble_EQ)) {
     if (TC.getArch() == llvm::Triple::avr)
@@ -5117,7 +5514,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
           << A->getValue() << A->getOption().getName();
   }
 
-  if (!TC.useIntegratedAs())
+  // If toolchain choose to use MCAsmParser for inline asm don't pass the
+  // option to disable integrated-as explictly.
+  if (!TC.useIntegratedAs() && !TC.parseInlineAsmUsingAsmParser())
     CmdArgs.push_back("-no-integrated-as");
 
   if (Args.hasArg(options::OPT_fdebug_pass_structure)) {
@@ -5131,10 +5530,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Enable -mconstructor-aliases except on darwin, where we have to work around
   // a linker bug (see <rdar://problem/7651567>), and CUDA/AMDGPU device code,
-  // where aliases aren't supported. Similarly, aliases aren't yet supported
-  // for AIX.
-  if (!RawTriple.isOSDarwin() && !RawTriple.isNVPTX() &&
-      !RawTriple.isAMDGPU() && !RawTriple.isOSAIX())
+  // where aliases aren't supported.
+  if (!RawTriple.isOSDarwin() && !RawTriple.isNVPTX() && !RawTriple.isAMDGPU())
     CmdArgs.push_back("-mconstructor-aliases");
 
   // Darwin's kernel doesn't support guard variables; just die if we
@@ -5172,27 +5569,27 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // This is a coarse approximation of what llvm-gcc actually does, both
   // -fasynchronous-unwind-tables and -fnon-call-exceptions interact in more
   // complicated ways.
-  bool UnwindTables =
+  bool AsyncUnwindTables =
       Args.hasFlag(options::OPT_fasynchronous_unwind_tables,
                    options::OPT_fno_asynchronous_unwind_tables,
                    (TC.IsUnwindTablesDefault(Args) ||
                     TC.getSanitizerArgs().needsUnwindTables()) &&
                        !Freestanding);
-  UnwindTables = Args.hasFlag(options::OPT_funwind_tables,
-                              options::OPT_fno_unwind_tables, UnwindTables);
-  if (UnwindTables)
-    CmdArgs.push_back("-munwind-tables");
+  bool UnwindTables = Args.hasFlag(options::OPT_funwind_tables,
+                                   options::OPT_fno_unwind_tables, false);
+  if (AsyncUnwindTables)
+    CmdArgs.push_back("-funwind-tables=2");
+  else if (UnwindTables)
+    CmdArgs.push_back("-funwind-tables=1");
 
   // Prepare `-aux-target-cpu` and `-aux-target-feature` unless
   // `--gpu-use-aux-triple-only` is specified.
   if (!Args.getLastArg(options::OPT_gpu_use_aux_triple_only) &&
-      ((IsCuda && JA.isDeviceOffloading(Action::OFK_Cuda)) ||
-       (IsSYCL && IsSYCLOffloadDevice) ||
-       (IsHIP && JA.isDeviceOffloading(Action::OFK_HIP)))) {
+      (IsCudaDevice || (IsSYCL && IsSYCLOffloadDevice) || IsHIPDevice)) {
     const ArgList &HostArgs =
         C.getArgsForToolChain(nullptr, StringRef(), Action::OFK_None);
     std::string HostCPU =
-        getCPUName(HostArgs, *TC.getAuxTriple(), /*FromAs*/ false);
+        getCPUName(D, HostArgs, *TC.getAuxTriple(), /*FromAs*/ false);
     if (!HostCPU.empty()) {
       CmdArgs.push_back("-aux-target-cpu");
       CmdArgs.push_back(Args.MakeArgString(HostCPU));
@@ -5209,11 +5606,15 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Arg *A = Args.getLastArg(options::OPT_mcmodel_EQ)) {
     StringRef CM = A->getValue();
     if (CM == "small" || CM == "kernel" || CM == "medium" || CM == "large" ||
-        CM == "tiny")
-      A->render(Args, CmdArgs);
-    else
+        CM == "tiny") {
+      if (Triple.isOSAIX() && CM == "medium")
+        CmdArgs.push_back("-mcmodel=large");
+      else
+        A->render(Args, CmdArgs);
+    } else {
       D.Diag(diag::err_drv_invalid_argument_to_option)
           << CM << A->getOption().getName();
+    }
   }
 
   if (Arg *A = Args.getLastArg(options::OPT_mtls_size_EQ)) {
@@ -5230,7 +5631,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   // Add the target cpu
-  std::string CPU = getCPUName(Args, Triple, /*FromAs*/ false);
+  std::string CPU = getCPUName(D, Args, Triple, /*FromAs*/ false);
   if (!CPU.empty()) {
     CmdArgs.push_back("-target-cpu");
     CmdArgs.push_back(Args.MakeArgString(CPU));
@@ -5317,6 +5718,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-H");
     CmdArgs.push_back("-sys-header-deps");
   }
+  Args.AddAllArgs(CmdArgs, options::OPT_fshow_skipped_includes);
 
   if (D.CCPrintHeaders && !D.CCGenDiagnostics) {
     CmdArgs.push_back("-header-include-file");
@@ -5356,15 +5758,20 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   if (Arg *A = Args.getLastArg(options::OPT_fbasic_block_sections_EQ)) {
+    StringRef Val = A->getValue();
     if (Triple.isX86() && Triple.isOSBinFormatELF()) {
-      StringRef Val = A->getValue();
       if (Val != "all" && Val != "labels" && Val != "none" &&
           !Val.startswith("list="))
         D.Diag(diag::err_drv_invalid_value)
             << A->getAsString(Args) << A->getValue();
       else
         A->render(Args, CmdArgs);
-    } else {
+    } else if (Triple.isNVPTX()) {
+      // Do not pass the option to the GPU compilation. We still want it enabled
+      // for the host-side compilation, so seeing it here is not an error.
+    } else if (Val != "none") {
+      // =none is allowed everywhere. It's useful for overriding the option
+      // and is the same as not specifying the option.
       D.Diag(diag::err_drv_unsupported_opt_for_target)
           << A->getAsString(Args) << TripleStr;
     }
@@ -5482,7 +5889,26 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   Args.AddAllArgs(CmdArgs, options::OPT_R_Group);
 
-  Args.AddAllArgs(CmdArgs, options::OPT_W_Group);
+  for (const Arg *A :
+       Args.filtered(options::OPT_W_Group, options::OPT__SLASH_wd)) {
+    A->claim();
+    if (A->getOption().getID() == options::OPT__SLASH_wd) {
+      unsigned WarningNumber;
+      if (StringRef(A->getValue()).getAsInteger(10, WarningNumber)) {
+        D.Diag(diag::err_drv_invalid_int_value)
+            << A->getAsString(Args) << A->getValue();
+        continue;
+      }
+
+      if (auto Group = diagGroupFromCLWarningID(WarningNumber)) {
+        CmdArgs.push_back(Args.MakeArgString(
+            "-Wno-" + DiagnosticIDs::getWarningOptionForGroup(*Group)));
+      }
+      continue;
+    }
+    A->render(Args, CmdArgs);
+  }
+
   if (Args.hasFlag(options::OPT_pedantic, options::OPT_no_pedantic, false))
     CmdArgs.push_back("-pedantic");
   Args.AddLastArg(CmdArgs, options::OPT_pedantic_errors);
@@ -5492,6 +5918,15 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasFlag(options::OPT_ffixed_point, options::OPT_fno_fixed_point,
                    /*Default=*/false))
     Args.AddLastArg(CmdArgs, options::OPT_ffixed_point);
+
+  if (Arg *A = Args.getLastArg(options::OPT_fcxx_abi_EQ))
+    A->render(Args, CmdArgs);
+
+  Args.AddLastArg(CmdArgs, options::OPT_fexperimental_relative_cxx_abi_vtables,
+                  options::OPT_fno_experimental_relative_cxx_abi_vtables);
+
+  if (Arg *A = Args.getLastArg(options::OPT_ffuchsia_api_level_EQ))
+    A->render(Args, CmdArgs);
 
   // Handle -{std, ansi, trigraphs} -- take the last of -{std, ansi}
   // (-ansi is equivalent to -std=c89 or -std=c++98).
@@ -5594,9 +6029,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-fno-gnu-keywords");
   }
 
-  if (ShouldDisableDwarfDirectory(Args, TC))
-    CmdArgs.push_back("-fno-dwarf-directory-asm");
-
   if (!ShouldEnableAutolink(Args, TC, JA))
     CmdArgs.push_back("-fno-autolink");
 
@@ -5670,6 +6102,18 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasFlag(options::OPT_fstack_size_section,
                    options::OPT_fno_stack_size_section, RawTriple.isPS4()))
     CmdArgs.push_back("-fstack-size-section");
+
+  if (Args.hasArg(options::OPT_fstack_usage)) {
+    CmdArgs.push_back("-stack-usage-file");
+
+    if (Arg *OutputOpt = Args.getLastArg(options::OPT_o)) {
+      SmallString<128> OutputFilename(OutputOpt->getValue());
+      llvm::sys::path::replace_extension(OutputFilename, "su");
+      CmdArgs.push_back(Args.MakeArgString(OutputFilename));
+    } else
+      CmdArgs.push_back(
+          Args.MakeArgString(Twine(getBaseInputStem(Args, Inputs)) + ".su"));
+  }
 
   CmdArgs.push_back("-ferror-limit");
   if (Arg *A = Args.getLastArg(options::OPT_ferror_limit_EQ))
@@ -5751,18 +6195,25 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
           << A->getAsString(Args) << TripleStr;
   }
 
-  Args.AddLastArg(CmdArgs, options::OPT_fvisibility_inlines_hidden);
+
+  if (Args.hasFlag(options::OPT_fvisibility_inlines_hidden,
+                    options::OPT_fno_visibility_inlines_hidden, false))
+    CmdArgs.push_back("-fvisibility-inlines-hidden");
+
   Args.AddLastArg(CmdArgs, options::OPT_fvisibility_inlines_hidden_static_local_var,
                            options::OPT_fno_visibility_inlines_hidden_static_local_var);
   Args.AddLastArg(CmdArgs, options::OPT_fvisibility_global_new_delete_hidden);
-
+  Args.AddLastArg(CmdArgs, options::OPT_fnew_infallible);
   Args.AddLastArg(CmdArgs, options::OPT_ftlsmodel_EQ);
+
+  if (Args.hasFlag(options::OPT_fno_operator_names,
+                   options::OPT_foperator_names, false))
+    CmdArgs.push_back("-fno-operator-names");
 
   // Forward -f (flag) options which we can pass directly.
   Args.AddLastArg(CmdArgs, options::OPT_femit_all_decls);
   Args.AddLastArg(CmdArgs, options::OPT_fheinous_gnu_extensions);
   Args.AddLastArg(CmdArgs, options::OPT_fdigraphs, options::OPT_fno_digraphs);
-  Args.AddLastArg(CmdArgs, options::OPT_fno_operator_names);
   Args.AddLastArg(CmdArgs, options::OPT_femulated_tls,
                   options::OPT_fno_emulated_tls);
 
@@ -5795,6 +6246,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                       options::OPT_fno_openmp_simd);
       Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_enable_irbuilder);
       Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_version_EQ);
+      if (!Args.hasFlag(options::OPT_fopenmp_extensions,
+                        options::OPT_fno_openmp_extensions, /*Default=*/true))
+        CmdArgs.push_back("-fno-openmp-extensions");
       Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_cuda_number_of_sm_EQ);
       Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_cuda_blocks_per_sm_EQ);
       Args.AddAllArgs(CmdArgs,
@@ -5810,12 +6264,18 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                        options::OPT_fno_openmp_cuda_mode, /*Default=*/false))
         CmdArgs.push_back("-fopenmp-cuda-mode");
 
-      // When in OpenMP offloading mode with NVPTX target, forward
-      // cuda-parallel-target-regions flag
-      if (Args.hasFlag(options::OPT_fopenmp_cuda_parallel_target_regions,
-                       options::OPT_fno_openmp_cuda_parallel_target_regions,
-                       /*Default=*/true))
-        CmdArgs.push_back("-fopenmp-cuda-parallel-target-regions");
+      // When in OpenMP offloading mode, enable or disable the new device
+      // runtime.
+      if (Args.hasFlag(options::OPT_fopenmp_target_new_runtime,
+                       options::OPT_fno_openmp_target_new_runtime,
+                       /*Default=*/false))
+        CmdArgs.push_back("-fopenmp-target-new-runtime");
+
+      // When in OpenMP offloading mode, enable debugging on the device.
+      Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_target_debug_EQ);
+      if (Args.hasFlag(options::OPT_fopenmp_target_debug,
+                       options::OPT_fno_openmp_target_debug, /*Default=*/false))
+        CmdArgs.push_back("-fopenmp-target-debug");
 
       // When in OpenMP offloading mode with NVPTX target, check if full runtime
       // is required.
@@ -5823,6 +6283,17 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                        options::OPT_fno_openmp_cuda_force_full_runtime,
                        /*Default=*/false))
         CmdArgs.push_back("-fopenmp-cuda-force-full-runtime");
+
+      // When in OpenMP offloading mode, forward assumptions information about
+      // thread and team counts in the device.
+      if (Args.hasFlag(options::OPT_fopenmp_assume_teams_oversubscription,
+                       options::OPT_fno_openmp_assume_teams_oversubscription,
+                       /*Default=*/false))
+        CmdArgs.push_back("-fopenmp-assume-teams-oversubscription");
+      if (Args.hasFlag(options::OPT_fopenmp_assume_threads_oversubscription,
+                       options::OPT_fno_openmp_assume_threads_oversubscription,
+                       /*Default=*/false))
+        CmdArgs.push_back("-fopenmp-assume-threads-oversubscription");
       break;
     default:
       // By default, if Clang doesn't know how to generate useful OpenMP code
@@ -5834,9 +6305,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       break;
     }
   } else {
-    Args.AddLastArg(CmdArgs, options::OPT_fopenmp_simd,
-                    options::OPT_fno_openmp_simd);
+    if (!JA.isDeviceOffloading(Action::OFK_SYCL))
+      Args.AddLastArg(CmdArgs, options::OPT_fopenmp_simd,
+                      options::OPT_fno_openmp_simd);
     Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_version_EQ);
+    if (!Args.hasFlag(options::OPT_fopenmp_extensions,
+                      options::OPT_fno_openmp_extensions, /*Default=*/true))
+      CmdArgs.push_back("-fno-openmp-extensions");
   }
 
   const SanitizerArgs &Sanitize = TC.getSanitizerArgs();
@@ -5904,6 +6379,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       (Args.hasArg(options::OPT_mkernel) && types::isCXX(InputType)))
     CmdArgs.push_back("-fapple-kext");
 
+  Args.AddLastArg(CmdArgs, options::OPT_altivec_src_compat);
   Args.AddLastArg(CmdArgs, options::OPT_flax_vector_conversions_EQ);
   Args.AddLastArg(CmdArgs, options::OPT_fobjc_sender_dependent_dispatch);
   Args.AddLastArg(CmdArgs, options::OPT_fdiagnostics_print_source_range_info);
@@ -5956,6 +6432,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   RenderSCPOptions(TC, Args, CmdArgs);
   RenderTrivialAutoVarInitOptions(D, TC, Args, CmdArgs);
 
+  Args.AddLastArg(CmdArgs, options::OPT_fswift_async_fp_EQ);
+
   // Translate -mstackrealign
   if (Args.hasFlag(options::OPT_mstackrealign, options::OPT_mno_stackrealign,
                    false))
@@ -5999,15 +6477,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // Forward -cl options to -cc1
   RenderOpenCLOptions(Args, CmdArgs, InputType);
 
-  // Forward -fsycl-instrument-device-code option to cc1. This option can only
-  // be used with spir triple.
-  if (Arg *A = Args.getLastArg(options::OPT_fsycl_instrument_device_code)) {
-    if (!Triple.isSPIR())
-      D.Diag(diag::err_drv_unsupported_opt_for_target)
-          << A->getAsString(Args) << TripleStr;
-    CmdArgs.push_back("-fsycl-instrument-device-code");
-  }
-
   if (IsHIP) {
     if (Args.hasFlag(options::OPT_fhip_new_launch_api,
                      options::OPT_fno_hip_new_launch_api, true))
@@ -6036,29 +6505,38 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         Args.MakeArgString(Twine("-fcf-protection=") + A->getValue()));
   }
 
-  // Forward -f options with positive and negative forms; we translate
-  // these by hand.
-  if (Arg *A = getLastProfileSampleUseArg(Args)) {
-    auto *PGOArg = Args.getLastArg(
-        options::OPT_fprofile_generate, options::OPT_fprofile_generate_EQ,
-        options::OPT_fcs_profile_generate, options::OPT_fcs_profile_generate_EQ,
-        options::OPT_fprofile_use, options::OPT_fprofile_use_EQ);
-    if (PGOArg)
-      D.Diag(diag::err_drv_argument_not_allowed_with)
-          << "SampleUse with PGO options";
+  // Forward -f options with positive and negative forms; we translate these by
+  // hand.  Do not propagate PGO options to the GPU-side compilations as the
+  // profile info is for the host-side compilation only.
+  if (!(IsCudaDevice || IsHIPDevice)) {
+    if (Arg *A = getLastProfileSampleUseArg(Args)) {
+      auto *PGOArg = Args.getLastArg(
+          options::OPT_fprofile_generate, options::OPT_fprofile_generate_EQ,
+          options::OPT_fcs_profile_generate,
+          options::OPT_fcs_profile_generate_EQ, options::OPT_fprofile_use,
+          options::OPT_fprofile_use_EQ);
+      if (PGOArg)
+        D.Diag(diag::err_drv_argument_not_allowed_with)
+            << "SampleUse with PGO options";
 
-    StringRef fname = A->getValue();
-    if (!llvm::sys::fs::exists(fname))
-      D.Diag(diag::err_drv_no_such_file) << fname;
-    else
-      A->render(Args, CmdArgs);
+      StringRef fname = A->getValue();
+      if (!llvm::sys::fs::exists(fname))
+        D.Diag(diag::err_drv_no_such_file) << fname;
+      else
+        A->render(Args, CmdArgs);
+    }
+    Args.AddLastArg(CmdArgs, options::OPT_fprofile_remapping_file_EQ);
+
+    if (Args.hasFlag(options::OPT_fpseudo_probe_for_profiling,
+                     options::OPT_fno_pseudo_probe_for_profiling, false)) {
+      CmdArgs.push_back("-fpseudo-probe-for-profiling");
+      // Enforce -funique-internal-linkage-names if it's not explicitly turned
+      // off.
+      if (Args.hasFlag(options::OPT_funique_internal_linkage_names,
+                       options::OPT_fno_unique_internal_linkage_names, true))
+        CmdArgs.push_back("-funique-internal-linkage-names");
+    }
   }
-  Args.AddLastArg(CmdArgs, options::OPT_fprofile_remapping_file_EQ);
-
-  if (Args.hasFlag(options::OPT_fpseudo_probe_for_profiling,
-                   options::OPT_fno_pseudo_probe_for_profiling, false))
-    CmdArgs.push_back("-fpseudo-probe-for-profiling");
-
   RenderBuiltinOptions(TC, RawTriple, Args, CmdArgs);
 
   if (!Args.hasFlag(options::OPT_fassume_sane_operator_new,
@@ -6133,6 +6611,16 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    options::OPT_fno_use_line_directives, false))
     CmdArgs.push_back("-fuse-line-directives");
 
+  // -fno-minimize-whitespace is default.
+  if (Args.hasFlag(options::OPT_fminimize_whitespace,
+                   options::OPT_fno_minimize_whitespace, false)) {
+    types::ID InputType = Inputs[0].getType();
+    if (!isDerivedFromC(InputType))
+      D.Diag(diag::err_drv_minws_unsupported_input_type)
+          << types::getTypeName(InputType);
+    CmdArgs.push_back("-fminimize-whitespace");
+  }
+
   // -fms-extensions=0 is default.
   if (Args.hasFlag(options::OPT_fms_extensions, options::OPT_fno_ms_extensions,
                    IsWindowsMSVC))
@@ -6196,7 +6684,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       LanguageStandard = llvm::StringSwitch<StringRef>(StdArg->getValue())
                              .Case("c++14", "-std=c++14")
                              .Case("c++17", "-std=c++17")
-                             .Case("c++latest", "-std=c++20")
+                             .Case("c++20", "-std=c++20")
+                             .Case("c++latest", "-std=c++2b")
                              .Default("");
       if (LanguageStandard.empty())
         D.Diag(clang::diag::warn_drv_unused_argument)
@@ -6232,7 +6721,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // than 19.
   if (!Args.hasFlag(options::OPT_fthreadsafe_statics,
                     options::OPT_fno_threadsafe_statics,
-                    !IsWindowsMSVC || IsMSVC2015Compatible))
+                    !types::isOpenCL(InputType) &&
+                        (!IsWindowsMSVC || IsMSVC2015Compatible)))
     CmdArgs.push_back("-fno-threadsafe-statics");
 
   // -fno-delayed-template-parsing is default, except when targeting MSVC.
@@ -6428,7 +6918,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // -finput_charset=UTF-8 is default. Reject others
   if (Arg *inputCharset = Args.getLastArg(options::OPT_finput_charset_EQ)) {
     StringRef value = inputCharset->getValue();
-    if (!value.equals_lower("utf-8"))
+    if (!value.equals_insensitive("utf-8"))
       D.Diag(diag::err_drv_invalid_value) << inputCharset->getAsString(Args)
                                           << value;
   }
@@ -6436,7 +6926,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // -fexec_charset=UTF-8 is default. Reject others
   if (Arg *execCharset = Args.getLastArg(options::OPT_fexec_charset_EQ)) {
     StringRef value = execCharset->getValue();
-    if (!value.equals_lower("utf-8"))
+    if (!value.equals_insensitive("utf-8"))
       D.Diag(diag::err_drv_invalid_value) << execCharset->getAsString(Args)
                                           << value;
   }
@@ -6453,17 +6943,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                     options::OPT_fno_gnu_inline_asm, true))
     CmdArgs.push_back("-fno-gnu-inline-asm");
 
-  bool EnableSYCLEarlyOptimizations =
-      Args.hasFlag(options::OPT_fsycl_early_optimizations,
-                   options::OPT_fno_sycl_early_optimizations,
-                   Triple.getSubArch() != llvm::Triple::SPIRSubArch_fpga);
-
   // Enable vectorization per default according to the optimization level
   // selected. For optimization levels that want vectorization we use the alias
   // option to simplify the hasFlag logic.
   bool EnableVec = shouldEnableVectorizerAtOLevel(Args, false);
-  if (RawTriple.isSPIR() && EnableSYCLEarlyOptimizations)
-    EnableVec = false; // But disable vectorization for SYCL device code
   OptSpecifier VectorizeAliasOption =
       EnableVec ? options::OPT_O_Group : options::OPT_fvectorize;
   if (Args.hasFlag(options::OPT_fvectorize, VectorizeAliasOption,
@@ -6472,8 +6955,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   // -fslp-vectorize is enabled based on the optimization level selected.
   bool EnableSLPVec = shouldEnableVectorizerAtOLevel(Args, true);
-  if (RawTriple.isSPIR() && EnableSYCLEarlyOptimizations)
-    EnableSLPVec = false; // But disable vectorization for SYCL device code
   OptSpecifier SLPVectAliasOption =
       EnableSLPVec ? options::OPT_O_Group : options::OPT_fslp_vectorize;
   if (Args.hasFlag(options::OPT_fslp_vectorize, SLPVectAliasOption,
@@ -6615,7 +7096,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // be added so both IR can be captured.
   if ((C.getDriver().isSaveTempsEnabled() ||
        JA.isHostOffloading(Action::OFK_OpenMP)) &&
-      !(C.getDriver().embedBitcodeInObject() && !C.getDriver().isUsingLTO()) &&
+      !(C.getDriver().embedBitcodeInObject() && !IsUsingLTO) &&
       isa<CompileJobAction>(JA))
     CmdArgs.push_back("-disable-llvm-passes");
 
@@ -6692,6 +7173,16 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (IsHIP)
     CmdArgs.push_back("-fcuda-allow-variadic-functions");
 
+  if (IsCudaDevice || IsHIPDevice || IsSYCLOffloadDevice) {
+    StringRef InlineThresh =
+        Args.getLastArgValue(options::OPT_fgpu_inline_threshold_EQ);
+    if (!InlineThresh.empty()) {
+      std::string ArgStr =
+          std::string("-inline-threshold=") + InlineThresh.str();
+      CmdArgs.append({"-mllvm", Args.MakeArgStringRef(ArgStr)});
+    }
+  }
+
   // OpenMP offloading device jobs take the argument -fopenmp-host-ir-file-path
   // to specify the result of the compile phase on the host, so the meaningful
   // device declarations can be identified. Also, -fopenmp-is-device is passed
@@ -6758,7 +7249,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (VirtualFunctionElimination) {
     // VFE requires full LTO (currently, this might be relaxed to allow ThinLTO
     // in the future).
-    if (D.getLTOMode() != LTOK_Full)
+    if (LTOMode != LTOK_Full)
       D.Diag(diag::err_drv_argument_only_allowed_with)
           << "-fvirtual-function-elimination"
           << "-flto=full";
@@ -6777,16 +7268,22 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   if (WholeProgramVTables) {
-    if (!D.isUsingLTO())
+    // Propagate -fwhole-program-vtables if this is an LTO compile.
+    if (IsUsingLTO)
+      CmdArgs.push_back("-fwhole-program-vtables");
+    // Check if we passed LTO options but they were suppressed because this is a
+    // device offloading action, or we passed device offload LTO options which
+    // were suppressed because this is not the device offload action.
+    // Otherwise, issue an error.
+    else if (!D.isUsingLTO(!IsDeviceOffloadAction))
       D.Diag(diag::err_drv_argument_only_allowed_with)
           << "-fwhole-program-vtables"
           << "-flto";
-    CmdArgs.push_back("-fwhole-program-vtables");
   }
 
   bool DefaultsSplitLTOUnit =
       (WholeProgramVTables || Sanitize.needsLTO()) &&
-      (D.getLTOMode() == LTOK_Full || TC.canSplitThinLTOUnit());
+      (LTOMode == LTOK_Full || TC.canSplitThinLTOUnit());
   bool SplitLTOUnit =
       Args.hasFlag(options::OPT_fsplit_lto_unit,
                    options::OPT_fno_split_lto_unit, DefaultsSplitLTOUnit);
@@ -6832,7 +7329,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
      // Enable order file instrumentation when ThinLTO is not on. When ThinLTO is
      // on, we need to pass these flags as linker flags and that will be handled
      // outside of the compiler.
-     if (!D.isUsingLTO()) {
+     if (!IsUsingLTO) {
        CmdArgs.push_back("-mllvm");
        CmdArgs.push_back("-enable-order-file-instrumentation");
      }
@@ -6889,7 +7386,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-faddrsig");
 
   if ((Triple.isOSBinFormatELF() || Triple.isOSBinFormatMachO()) &&
-      (EH || UnwindTables || DebugInfoKind != codegenoptions::NoDebugInfo))
+      (EH || AsyncUnwindTables || UnwindTables ||
+       DebugInfoKind != codegenoptions::NoDebugInfo))
     CmdArgs.push_back("-D__GCC_HAVE_DWARF2_CFI_ASM=1");
 
   if (Arg *A = Args.getLastArg(options::OPT_fsymbol_partition_EQ)) {
@@ -7184,9 +7682,9 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
                            bool *EmitCodeView) const {
   unsigned RTOptionID = options::OPT__SLASH_MT;
   bool isNVPTX = getToolChain().getTriple().isNVPTX();
-  bool isSYCLDevice =
-      getToolChain().getTriple().getEnvironment() == llvm::Triple::SYCLDevice;
-  bool isSYCL = Args.hasArg(options::OPT_fsycl) || isSYCLDevice;
+  bool isSPIR = getToolChain().getTriple().isSPIR();
+  // FIXME: isSYCL should not be enabled by "isSPIR"
+  bool isSYCL = Args.hasArg(options::OPT_fsycl) || isSPIR;
   // For SYCL Windows, /MD is the default.
   if (isSYCL)
     RTOptionID = options::OPT__SLASH_MD;
@@ -7198,7 +7696,7 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
 
   if (Arg *A = Args.getLastArg(options::OPT__SLASH_M_Group)) {
     RTOptionID = A->getOption().getID();
-    if (isSYCL && !isSYCLDevice &&
+    if (isSYCL && !isSPIR &&
         (RTOptionID == options::OPT__SLASH_MT ||
          RTOptionID == options::OPT__SLASH_MTd))
       // Use of /MT or /MTd is not supported for SYCL.
@@ -7210,9 +7708,9 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
   auto addPreDefines = [&](unsigned Defines) {
     if (Defines & addDEBUG)
       CmdArgs.push_back("-D_DEBUG");
-    if (Defines & addMT && !isSYCLDevice)
+    if (Defines & addMT && !isSPIR)
       CmdArgs.push_back("-D_MT");
-    if (Defines & addDLL && !isSYCLDevice)
+    if (Defines & addDLL && !isSPIR)
       CmdArgs.push_back("-D_DLL");
   };
   StringRef FlagForCRT;
@@ -7287,7 +7785,7 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
                                           options::OPT_gline_tables_only)) {
     *EmitCodeView = true;
     if (DebugInfoArg->getOption().matches(options::OPT__SLASH_Z7))
-      *DebugInfoKind = codegenoptions::LimitedDebugInfo;
+      *DebugInfoKind = codegenoptions::DebugInfoConstructor;
     else
       *DebugInfoKind = codegenoptions::DebugLineTablesOnly;
   } else {
@@ -7401,17 +7899,17 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
     StringRef GuardArgs = A->getValue();
     // The only valid options are "cf", "cf,nochecks", "cf-", "ehcont" and
     // "ehcont-".
-    if (GuardArgs.equals_lower("cf")) {
+    if (GuardArgs.equals_insensitive("cf")) {
       // Emit CFG instrumentation and the table of address-taken functions.
       CmdArgs.push_back("-cfguard");
-    } else if (GuardArgs.equals_lower("cf,nochecks")) {
+    } else if (GuardArgs.equals_insensitive("cf,nochecks")) {
       // Emit only the table of address-taken functions.
       CmdArgs.push_back("-cfguard-no-checks");
-    } else if (GuardArgs.equals_lower("ehcont")) {
+    } else if (GuardArgs.equals_insensitive("ehcont")) {
       // Emit EH continuation table.
       CmdArgs.push_back("-ehcontguard");
-    } else if (GuardArgs.equals_lower("cf-") ||
-               GuardArgs.equals_lower("ehcont-")) {
+    } else if (GuardArgs.equals_insensitive("cf-") ||
+               GuardArgs.equals_insensitive("ehcont-")) {
       // Do nothing, but we might want to emit a security warning in future.
     } else {
       D.Diag(diag::err_drv_invalid_value) << A->getSpelling() << GuardArgs;
@@ -7530,7 +8028,7 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back(Clang::getBaseInputName(Args, Input));
 
   // Add the target cpu
-  std::string CPU = getCPUName(Args, Triple, /*FromAs*/ true);
+  std::string CPU = getCPUName(D, Args, Triple, /*FromAs*/ true);
   if (!CPU.empty()) {
     CmdArgs.push_back("-target-cpu");
     CmdArgs.push_back(Args.MakeArgString(CPU));
@@ -7575,7 +8073,7 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
     // the guard for source type, however there is a test which asserts
     // that some assembler invocation receives no -debug-info-kind,
     // and it's not clear whether that test is just overly restrictive.
-    DebugInfoKind = (WantDebug ? codegenoptions::LimitedDebugInfo
+    DebugInfoKind = (WantDebug ? codegenoptions::DebugInfoConstructor
                                : codegenoptions::NoDebugInfo);
     // Add the -fdebug-compilation-dir flag if needed.
     addDebugCompDirArg(Args, CmdArgs, C.getDriver().getVFS());
@@ -7768,9 +8266,28 @@ void OffloadBundler::ConstructJob(Compilation &C, const JobAction &JA,
     Triples += Action::GetOffloadKindName(CurKind);
     Triples += '-';
     Triples += CurTC->getTriple().normalize();
-    if (CurKind == Action::OFK_HIP && CurDep->getOffloadingArch()) {
+    if ((CurKind == Action::OFK_HIP || CurKind == Action::OFK_OpenMP ||
+         CurKind == Action::OFK_Cuda || CurKind == Action::OFK_SYCL) &&
+        CurDep->getOffloadingArch()) {
       Triples += '-';
       Triples += CurDep->getOffloadingArch();
+    }
+
+    // TODO: Replace parsing of -march flag. Can be done by storing GPUArch
+    //       with each toolchain.
+    StringRef GPUArchName;
+    if (CurKind == Action::OFK_OpenMP) {
+      // Extract GPUArch from -march argument in TC argument list.
+      for (unsigned ArgIndex = 0; ArgIndex < TCArgs.size(); ArgIndex++) {
+        auto ArchStr = StringRef(TCArgs.getArgString(ArgIndex));
+        auto Arch = ArchStr.startswith_insensitive("-march=");
+        if (Arch) {
+          GPUArchName = ArchStr.substr(7);
+          Triples += "-";
+          break;
+        }
+      }
+      Triples += GPUArchName.str();
     }
   }
   // If we see we are bundling for FPGA using -fintelfpga, add the
@@ -7811,8 +8328,11 @@ void OffloadBundler::ConstructJob(Compilation &C, const JobAction &JA,
         assert(CurTC == nullptr && "Expected one dependence!");
         CurTC = TC;
       });
+      UB += C.addTempFile(
+          C.getArgs().MakeArgString(CurTC->getInputFilename(Inputs[I])));
+    } else {
+      UB += CurTC->getInputFilename(Inputs[I]);
     }
-    UB += CurTC->getInputFilename(Inputs[I]);
   }
   // For -fintelfpga, when bundling objects we also want to bundle up the
   // named dependency file.
@@ -7856,7 +8376,6 @@ void OffloadBundler::ConstructJobMultipleOutputs(
   bool IsFPGADepLibUnbundle = JA.getType() == types::TY_FPGA_Dependencies_List;
 
   if (InputType == types::TY_FPGA_AOCX || InputType == types::TY_FPGA_AOCR ||
-      InputType == types::TY_FPGA_AOCX_EMU ||
       InputType == types::TY_FPGA_AOCR_EMU) {
     // Override type with AOCX/AOCR which will unbundle to a list containing
     // binaries with the appropriate file extension (.aocx/.aocr).
@@ -7864,12 +8383,8 @@ void OffloadBundler::ConstructJobMultipleOutputs(
     // types (aocx/aocr) are always list files.  We should represent this
     // better in the output extension and type for improved understanding
     // of file contents and debuggability.
-    if (getToolChain().getTriple().getSubArch() ==
-        llvm::Triple::SPIRSubArch_fpga) {
-      bool isAOCX = InputType == types::TY_FPGA_AOCX ||
-                    InputType == types::TY_FPGA_AOCX_EMU;
-      TypeArg = isAOCX ? "aocx" : "aocr";
-    } else
+    TypeArg = (InputType == types::TY_FPGA_AOCX) ? "aocx" : "aocr";
+    if (!getToolChain().getTriple().isSPIR())
       TypeArg = "aoo";
   }
   if (InputType == types::TY_FPGA_AOCO || IsFPGADepLibUnbundle)
@@ -7890,31 +8405,32 @@ void OffloadBundler::ConstructJobMultipleOutputs(
     // aocx or aocr type bundles.  Also, we only do a specific target
     // unbundling, skipping the host side or device side.
     if (types::isFPGA(InputType)) {
-      if (getToolChain().getTriple().getSubArch() ==
-              llvm::Triple::SPIRSubArch_fpga &&
-          Dep.DependentOffloadKind == Action::OFK_SYCL) {
-        llvm::Triple TT;
-        TT.setArchName(types::getTypeName(InputType));
-        TT.setVendorName("intel");
-        TT.setOS(getToolChain().getTriple().getOS());
-        TT.setEnvironment(llvm::Triple::SYCLDevice);
-        Triples += "sycl-";
-        Triples += TT.normalize();
-      } else if (getToolChain().getTriple().getSubArch() !=
-                     llvm::Triple::SPIRSubArch_fpga &&
-                 Dep.DependentOffloadKind == Action::OFK_Host) {
-        Triples += Action::GetOffloadKindName(Dep.DependentOffloadKind);
-        Triples += '-';
-        Triples += Dep.DependentToolChain->getTriple().normalize();
-      }
-      continue;
+      if (getToolChain().getTriple().isSPIR()) {
+        if (Dep.DependentToolChain->getTriple().getSubArch() ==
+            llvm::Triple::SPIRSubArch_fpga) {
+          if (J++)
+            Triples += ',';
+          llvm::Triple TT;
+          TT.setArchName(types::getTypeName(InputType));
+          TT.setVendorName("intel");
+          TT.setOS(getToolChain().getTriple().getOS());
+          Triples += "sycl-";
+          Triples += TT.normalize();
+          continue;
+        } else if (Dep.DependentOffloadKind == Action::OFK_Host) {
+          // No host unbundle for FPGA binaries.
+          continue;
+        }
+      } else if (Dep.DependentOffloadKind == Action::OFK_SYCL)
+        continue;
     } else if (InputType == types::TY_Archive ||
-               (TCArgs.hasArg(options::OPT_fintelfpga) &&
+               (getToolChain().getTriple().getSubArch() ==
+                    llvm::Triple::SPIRSubArch_fpga &&
                 TCArgs.hasArg(options::OPT_fsycl_link_EQ))) {
       // Do not extract host part if we are unbundling archive on Windows
       // because it is not needed. Static offload libraries are added to the
       // host link command just as normal libraries.  Do not extract the host
-      // part from -fintelfpga -fsycl-link unbundles either, as the full obj
+      // part from FPGA -fsycl-link unbundles either, as the full obj
       // is used in the final link
       if (Dep.DependentOffloadKind == Action::OFK_Host)
         continue;
@@ -7924,10 +8440,29 @@ void OffloadBundler::ConstructJobMultipleOutputs(
     Triples += Action::GetOffloadKindName(Dep.DependentOffloadKind);
     Triples += '-';
     Triples += Dep.DependentToolChain->getTriple().normalize();
-    if (Dep.DependentOffloadKind == Action::OFK_HIP &&
+    if ((Dep.DependentOffloadKind == Action::OFK_HIP ||
+         Dep.DependentOffloadKind == Action::OFK_OpenMP ||
+         Dep.DependentOffloadKind == Action::OFK_Cuda ||
+         Dep.DependentOffloadKind == Action::OFK_SYCL) &&
         !Dep.DependentBoundArch.empty()) {
       Triples += '-';
       Triples += Dep.DependentBoundArch;
+    }
+    // TODO: Replace parsing of -march flag. Can be done by storing GPUArch
+    //       with each toolchain.
+    StringRef GPUArchName;
+    if (Dep.DependentOffloadKind == Action::OFK_OpenMP) {
+      // Extract GPUArch from -march argument in TC argument list.
+      for (unsigned ArgIndex = 0; ArgIndex < TCArgs.size(); ArgIndex++) {
+        StringRef ArchStr = StringRef(TCArgs.getArgString(ArgIndex));
+        auto Arch = ArchStr.startswith_insensitive("-march=");
+        if (Arch) {
+          GPUArchName = ArchStr.substr(7);
+          Triples += "-";
+          break;
+        }
+      }
+      Triples += GPUArchName.str();
     }
   }
   if (IsFPGADepUnbundle || IsFPGADepLibUnbundle) {
@@ -8007,18 +8542,18 @@ void OffloadWrapper::ConstructJob(Compilation &C, const JobAction &JA,
     llvm::Triple TT = getToolChain().getTriple();
     SmallString<128> TargetTripleOpt = TT.getArchName();
     // When wrapping an FPGA device binary, we need to be sure to apply the
-    // appropriate triple that corresponds (fpga_aoc[xr]-intel-<os>-sycldevice)
+    // appropriate triple that corresponds (fpga_aoc[xr]-intel-<os>)
     // to the target triple setting.
     if (TT.getSubArch() == llvm::Triple::SPIRSubArch_fpga &&
         TCArgs.hasArg(options::OPT_fsycl_link_EQ)) {
       SmallString<16> FPGAArch("fpga_");
       auto *A = C.getInputArgs().getLastArg(options::OPT_fsycl_link_EQ);
-      FPGAArch += A->getValue() == StringRef("early") ? "aocr" : "aocx";
-      if (C.getDriver().isFPGAEmulationMode())
+      bool Early = (A->getValue() == StringRef("early"));
+      FPGAArch += Early ? "aocr" : "aocx";
+      if (C.getDriver().isFPGAEmulationMode() && Early)
         FPGAArch += "_emu";
       TT.setArchName(FPGAArch);
       TT.setVendorName("intel");
-      TT.setEnvironment(llvm::Triple::SYCLDevice);
       TargetTripleOpt = TT.str();
       // When wrapping an FPGA aocx binary to archive, do not emit registration
       // functions
@@ -8054,10 +8589,10 @@ void OffloadWrapper::ConstructJob(Compilation &C, const JobAction &JA,
       // Only store compile/link opts in the image descriptor for the SPIR-V
       // target; AOT compilation has already been performed otherwise.
       TC.AddImpliedTargetArgs(TT, TCArgs, BuildArgs);
-      TC.TranslateBackendTargetArgs(TCArgs, BuildArgs);
+      TC.TranslateBackendTargetArgs(TT, TCArgs, BuildArgs);
       createArgString("-compile-opts=");
       BuildArgs.clear();
-      TC.TranslateLinkerTargetArgs(TCArgs, BuildArgs);
+      TC.TranslateLinkerTargetArgs(TT, TCArgs, BuildArgs);
       createArgString("-link-opts=");
     }
 
@@ -8102,12 +8637,13 @@ void OffloadWrapper::ConstructJob(Compilation &C, const JobAction &JA,
     bool IsPIE;
     std::tie(RelocationModel, PICLevel, IsPIE) =
         ParsePICArgs(getToolChain(), TCArgs);
-    if (PICLevel > 0) {
+    if (PICLevel > 0 || TCArgs.hasArg(options::OPT_shared)) {
       LlcArgs.push_back("-relocation-model=pic");
     }
-    if (IsPIE) {
-      LlcArgs.push_back("-enable-pie");
-    }
+    if (Arg *A = C.getArgs().getLastArg(options::OPT_mcmodel_EQ))
+      LlcArgs.push_back(
+          TCArgs.MakeArgString(Twine("--code-model=") + A->getValue()));
+
     SmallString<128> LlcPath(C.getDriver().Dir);
     llvm::sys::path::append(LlcPath, "llc");
     const char *Llc = C.getArgs().MakeArgString(LlcPath);
@@ -8206,8 +8742,11 @@ void OffloadDeps::constructJob(Compilation &C, const JobAction &JA,
       Targets += ',';
     Targets += Action::GetOffloadKindName(Dep.DependentOffloadKind);
     Targets += '-';
-    Targets += Dep.DependentToolChain->getTriple().normalize();
-    if (Dep.DependentOffloadKind == Action::OFK_HIP &&
+    std::string NormalizedTriple =
+        Dep.DependentToolChain->getTriple().normalize();
+    Targets += NormalizedTriple;
+    if ((Dep.DependentOffloadKind == Action::OFK_HIP ||
+         Dep.DependentOffloadKind == Action::OFK_SYCL) &&
         !Dep.DependentBoundArch.empty()) {
       Targets += '-';
       Targets += Dep.DependentBoundArch;
@@ -8268,36 +8807,55 @@ void SPIRVTranslator::ConstructJob(Compilation &C, const JobAction &JA,
 
   TranslatorArgs.push_back("-o");
   TranslatorArgs.push_back(Output.getFilename());
-  if (getToolChain().getTriple().isSYCLDeviceEnvironment()) {
-    TranslatorArgs.push_back("-spirv-max-version=1.3");
-    TranslatorArgs.push_back("-spirv-debug-info-version=legacy");
+  if (JA.isDeviceOffloading(Action::OFK_SYCL)) {
+    TranslatorArgs.push_back("-spirv-max-version=1.4");
+    TranslatorArgs.push_back("-spirv-debug-info-version=ocl-100");
     // Prevent crash in the translator if input IR contains DIExpression
     // operations which don't have mapping to OpenCL.DebugInfo.100 spec.
     TranslatorArgs.push_back("-spirv-allow-extra-diexpressions");
     TranslatorArgs.push_back("-spirv-allow-unknown-intrinsics=llvm.genx.");
 
-    // Disable SPV_INTEL_usm_storage_classes by default since it adds new
-    // storage classes that represent global_device and global_host address
-    // spaces, which are not supported for all targets. With the extension
-    // disable the storage classes will be lowered to CrossWorkgroup storage
-    // class that is mapped to just global address space. The extension is
-    // supposed to be enabled only for FPGA hardware.
-    std::string ExtArg("-spirv-ext=+all,-SPV_INTEL_usm_storage_classes");
-    if (getToolChain().getTriple().getSubArch() ==
-        llvm::Triple::SPIRSubArch_fpga) {
-      for (auto *A : TCArgs) {
-        if (A->getOption().matches(options::OPT_Xs_separate) ||
-            A->getOption().matches(options::OPT_Xs)) {
-          StringRef ArgString(A->getValue());
-          if (ArgString == "hardware" || ArgString == "simulation")
-            ExtArg = "-spirv-ext=+all";
-        }
-      }
-    }
-    // Temporary disable SPV_INTEL_optnone & SPV_KHR_linkonce_odr &
-    // SPV_INTEL_memory_access_aliasinguntil some targets support it.
-    ExtArg += ",-SPV_INTEL_optnone,-SPV_KHR_linkonce_odr"
-              ",-SPV_INTEL_memory_access_aliasing";
+    // Disable all the extensions by default
+    std::string ExtArg("-spirv-ext=-all");
+    std::string DefaultExtArg =
+        ",+SPV_EXT_shader_atomic_float_add,+SPV_EXT_shader_atomic_float_min_max"
+        ",+SPV_KHR_no_integer_wrap_decoration,+SPV_KHR_float_controls";
+    std::string INTELExtArg =
+        ",+SPV_INTEL_subgroups,+SPV_INTEL_media_block_io"
+        ",+SPV_INTEL_device_side_avc_motion_estimation"
+        ",+SPV_INTEL_fpga_loop_controls,+SPV_INTEL_fpga_memory_attributes"
+        ",+SPV_INTEL_fpga_memory_accesses"
+        ",+SPV_INTEL_unstructured_loop_controls,+SPV_INTEL_fpga_reg"
+        ",+SPV_INTEL_blocking_pipes,+SPV_INTEL_function_pointers"
+        ",+SPV_INTEL_kernel_attributes,+SPV_INTEL_io_pipes"
+        ",+SPV_INTEL_inline_assembly,+SPV_INTEL_arbitrary_precision_integers"
+        ",+SPV_INTEL_optimization_hints,+SPV_INTEL_float_controls2"
+        ",+SPV_INTEL_vector_compute,+SPV_INTEL_fast_composite"
+        ",+SPV_INTEL_fpga_buffer_location"
+        ",+SPV_INTEL_arbitrary_precision_fixed_point"
+        ",+SPV_INTEL_arbitrary_precision_floating_point"
+        ",+SPV_INTEL_arbitrary_precision_floating_point"
+        ",+SPV_INTEL_variable_length_array,+SPV_INTEL_fp_fast_math_mode"
+        ",+SPV_INTEL_fpga_cluster_attributes,+SPV_INTEL_loop_fuse"
+        ",+SPV_INTEL_long_constant_composite"
+        ",+SPV_INTEL_fpga_invocation_pipelining_attributes"
+        ",+SPV_INTEL_fpga_dsp_control"
+        ",+SPV_INTEL_arithmetic_fence"
+        ",+SPV_INTEL_runtime_aligned";
+    ExtArg = ExtArg + DefaultExtArg + INTELExtArg;
+    if (!C.getDriver().isFPGAEmulationMode())
+      // Enable SPV_INTEL_usm_storage_classes only for FPGA hardware,
+      // since it adds new storage classes that represent global_device and
+      // global_host address spaces, which are not supported for all
+      // targets. With the extension disabled the storage classes will be
+      // lowered to CrossWorkgroup storage class that is mapped to just
+      // global address space.
+      ExtArg += ",+SPV_INTEL_usm_storage_classes";
+    else
+      // Don't enable several freshly added extensions on FPGA H/W
+      ExtArg += ",+SPV_INTEL_token_type"
+                ",+SPV_INTEL_bfloat16_conversion"
+                ",+SPV_INTEL_joint_matrix";
     TranslatorArgs.push_back(TCArgs.MakeArgString(ExtArg));
   }
   for (auto I : Inputs) {
@@ -8327,6 +8885,11 @@ void SPIRVTranslator::ConstructJob(Compilation &C, const JobAction &JA,
         TCArgs.MakeArgString("--out-file-list=" + OutputFileName));
     ForeachArgs.push_back(
         TCArgs.MakeArgString("--out-replace=" + OutputFileName));
+    StringRef ParallelJobs =
+        TCArgs.getLastArgValue(options::OPT_fsycl_max_parallel_jobs_EQ);
+    if (!ParallelJobs.empty())
+      ForeachArgs.push_back(TCArgs.MakeArgString("--jobs=" + ParallelJobs));
+
     ForeachArgs.push_back(TCArgs.MakeArgString("--"));
     ForeachArgs.push_back(TCArgs.MakeArgString(Cmd->getExecutable()));
 
@@ -8425,56 +8988,63 @@ void SYCLPostLink::ConstructJob(Compilation &C, const JobAction &JA,
                              const InputInfoList &Inputs,
                              const llvm::opt::ArgList &TCArgs,
                              const char *LinkingOutput) const {
+  const SYCLPostLinkJobAction *SYCLPostLink =
+      dyn_cast<SYCLPostLinkJobAction>(&JA);
   // Construct sycl-post-link command.
-  assert(isa<SYCLPostLinkJobAction>(JA) && "Expecting SYCL post link job!");
+  assert(SYCLPostLink && "Expecting SYCL post link job!");
   ArgStringList CmdArgs;
 
   // See if device code splitting is requested
   if (Arg *A = TCArgs.getLastArg(options::OPT_fsycl_device_code_split_EQ)) {
-    if (StringRef(A->getValue()) == "per_kernel")
+    auto CodeSplitValue = StringRef(A->getValue());
+    if (CodeSplitValue == "per_kernel")
       addArgs(CmdArgs, TCArgs, {"-split=kernel"});
-    else if (StringRef(A->getValue()) == "per_source")
+    else if (CodeSplitValue == "per_source")
       addArgs(CmdArgs, TCArgs, {"-split=source"});
-    else if (StringRef(A->getValue()) == "auto")
+    else if (CodeSplitValue == "auto")
       addArgs(CmdArgs, TCArgs, {"-split=auto"});
-    else
-      // split must be off
-      assert(StringRef(A->getValue()) == "off");
+    else { // Device code split is off
+    }
   } else {
     // auto is the default split mode
     addArgs(CmdArgs, TCArgs, {"-split=auto"});
   }
+
+  // On FPGA target we don't need non-kernel functions as entry points, because
+  // it only increases amount of code for device compiler to handle, without any
+  // actual benefits.
+  if (getToolChain().getTriple().getArchName() == "spir64_fpga")
+    addArgs(CmdArgs, TCArgs, {"-emit-only-kernels-as-entry-points"});
+
   // OPT_fsycl_device_code_split is not checked as it is an alias to
   // -fsycl-device-code-split=auto
 
   // Turn on Dead Parameter Elimination Optimization with early optimizations
-  if (!getToolChain().getTriple().isNVPTX() &&
+  if (!(getToolChain().getTriple().isAMDGCN()) &&
       TCArgs.hasFlag(options::OPT_fsycl_dead_args_optimization,
                      options::OPT_fno_sycl_dead_args_optimization, false))
     addArgs(CmdArgs, TCArgs, {"-emit-param-info"});
-  if (JA.getType() == types::TY_LLVM_BC) {
+  // Enable PI program metadata
+  if (getToolChain().getTriple().isNVPTX())
+    addArgs(CmdArgs, TCArgs, {"-emit-program-metadata"});
+  if (SYCLPostLink->getTrueType() == types::TY_LLVM_BC) {
     // single file output requested - this means only perform necessary IR
     // transformations (like specialization constant intrinsic lowering) and
     // output LLVMIR
     addArgs(CmdArgs, TCArgs, {"-ir-output-only"});
   } else {
-    assert(JA.getType() == types::TY_Tempfiletable);
+    assert(SYCLPostLink->getTrueType() == types::TY_Tempfiletable);
     // Symbol file and specialization constant info generation is mandatory -
     // add options unconditionally
     addArgs(CmdArgs, TCArgs, {"-symbols"});
-    // By default we split SYCL and ESIMD kernels into separate modules
-    if (TCArgs.hasFlag(options::OPT_fsycl_device_code_split_esimd,
-                       options::OPT_fno_sycl_device_code_split_esimd, true))
-      addArgs(CmdArgs, TCArgs, {"-split-esimd"});
-    if (TCArgs.hasFlag(options::OPT_fsycl_device_code_lower_esimd,
-                       options::OPT_fno_sycl_device_code_lower_esimd, true))
-      addArgs(CmdArgs, TCArgs, {"-lower-esimd"});
+    addArgs(CmdArgs, TCArgs, {"-emit-exported-symbols"});
+    addArgs(CmdArgs, TCArgs, {"-split-esimd"});
+    addArgs(CmdArgs, TCArgs, {"-lower-esimd"});
   }
   addArgs(CmdArgs, TCArgs,
           {StringRef(getSYCLPostLinkOptimizationLevel(TCArgs))});
   // specialization constants processing is mandatory
-  auto *SYCLPostLink = llvm::dyn_cast<SYCLPostLinkJobAction>(&JA);
-  if (SYCLPostLink && SYCLPostLink->getRTSetsSpecConstants())
+  if (SYCLPostLink->getRTSetsSpecConstants())
     addArgs(CmdArgs, TCArgs, {"-spec-const=rt"});
   else
     addArgs(CmdArgs, TCArgs, {"-spec-const=default"});
@@ -8538,6 +9108,15 @@ void FileTableTform::ConstructJob(Compilation &C, const JobAction &JA,
       addArgs(CmdArgs, TCArgs, {Arg});
       break;
     }
+    case FileTableTformJobAction::Tform::REPLACE_CELL: {
+      assert(Tf.TheArgs.size() == 2 && "column name and row id expected");
+      SmallString<128> Arg("-replace_cell=");
+      Arg += Tf.TheArgs[0];
+      Arg += ",";
+      Arg += Tf.TheArgs[1];
+      addArgs(CmdArgs, TCArgs, {Arg});
+      break;
+    }
     case FileTableTformJobAction::Tform::RENAME: {
       assert(Tf.TheArgs.size() == 2 && "from/to names expected");
       SmallString<128> Arg("-rename=");
@@ -8547,8 +9126,18 @@ void FileTableTform::ConstructJob(Compilation &C, const JobAction &JA,
       addArgs(CmdArgs, TCArgs, {Arg});
       break;
     }
+    case FileTableTformJobAction::Tform::COPY_SINGLE_FILE: {
+      assert(Tf.TheArgs.size() == 2 && "column name and row id expected");
+      SmallString<128> Arg("-copy_single_file=");
+      Arg += Tf.TheArgs[0];
+      Arg += ",";
+      Arg += Tf.TheArgs[1];
+      addArgs(CmdArgs, TCArgs, {Arg});
+      break;
+    }
     }
   }
+
   // 2) add output option
   assert(Output.isFilename() && "table tform output must be a file");
   addArgs(CmdArgs, TCArgs, {"-o", Output.getFilename()});
@@ -8563,4 +9152,43 @@ void FileTableTform::ConstructJob(Compilation &C, const JobAction &JA,
       JA, *this, ResponseFileSupport::None(),
       TCArgs.MakeArgString(getToolChain().GetProgramPath(getShortName())),
       CmdArgs, Inputs));
+}
+
+void AppendFooter::ConstructJob(Compilation &C, const JobAction &JA,
+                                const InputInfo &Output,
+                                const InputInfoList &Inputs,
+                                const llvm::opt::ArgList &TCArgs,
+                                const char *LinkingOutput) const {
+  ArgStringList CmdArgs;
+
+  // Input File
+  addArgs(CmdArgs, TCArgs, {Inputs[0].getFilename()});
+
+  // Integration Footer
+  StringRef Footer(
+      C.getDriver().getIntegrationFooter(Inputs[0].getBaseInput()));
+  if (!Footer.empty()) {
+    SmallString<128> AppendOpt("--append=");
+    AppendOpt.append(Footer);
+    addArgs(CmdArgs, TCArgs, {AppendOpt});
+  }
+
+  // Name of original source file passed in to be prepended to the newly
+  // modified file as a #line directive.
+  SmallString<128> PrependOpt("--orig-filename=");
+  PrependOpt.append(
+      llvm::sys::path::convert_to_slash(Inputs[0].getBaseInput()));
+  addArgs(CmdArgs, TCArgs, {PrependOpt});
+
+  SmallString<128> OutputOpt("--output=");
+  OutputOpt.append(Output.getFilename());
+  addArgs(CmdArgs, TCArgs, {OutputOpt});
+
+  // Use #include to pull in footer
+  addArgs(CmdArgs, TCArgs, {"--use-include"});
+
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::None(),
+      TCArgs.MakeArgString(getToolChain().GetProgramPath(getShortName())),
+      CmdArgs, None));
 }

@@ -28,10 +28,10 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/Program.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Target/TargetOptions.h"
@@ -49,6 +49,11 @@ class SerializeToHsacoPass
     : public PassWrapper<SerializeToHsacoPass, gpu::SerializeToBlobPass> {
 public:
   SerializeToHsacoPass();
+
+  StringRef getArgument() const override { return "gpu-to-hsaco"; }
+  StringRef getDescription() const override {
+    return "Lower GPU kernel function to HSACO binary annotations";
+  }
 
 private:
   void getDependentDialects(DialectRegistry &registry) const override;
@@ -168,9 +173,10 @@ SerializeToHsacoPass::assembleIsa(const std::string &isa) {
       target->createMCAsmInfo(*mri, this->triple, mcOptions));
   mai->setRelaxELFRelocations(true);
 
-  llvm::MCObjectFileInfo mofi;
-  llvm::MCContext ctx(mai.get(), mri.get(), &mofi, &srcMgr, &mcOptions);
-  mofi.InitMCObjectFileInfo(triple, false, ctx, false);
+  llvm::MCContext ctx(triple, mai.get(), mri.get(), &srcMgr, &mcOptions);
+  std::unique_ptr<llvm::MCObjectFileInfo> mofi(target->createMCObjectFileInfo(
+      ctx, /*PIC=*/false, /*LargeCodeModel=*/false));
+  ctx.setObjectFileInfo(mofi.get());
 
   SmallString<128> cwd;
   if (!llvm::sys::fs::current_path(cwd))
@@ -267,7 +273,6 @@ SerializeToHsacoPass::serializeISA(const std::string &isa) {
 // Register pass to serialize GPU kernel functions to a HSACO binary annotation.
 void mlir::registerGpuSerializeToHsacoPass() {
   PassRegistration<SerializeToHsacoPass> registerSerializeToHSACO(
-      "gpu-to-hsaco", "Lower GPU kernel function to HSACO binary annotations",
       [] {
         // Initialize LLVM AMDGPU backend.
         LLVMInitializeAMDGPUAsmParser();

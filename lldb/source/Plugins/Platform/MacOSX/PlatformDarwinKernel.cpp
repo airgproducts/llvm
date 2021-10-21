@@ -197,7 +197,7 @@ public:
     m_collection_sp->Initialize(g_platformdarwinkernel_properties);
   }
 
-  virtual ~PlatformDarwinKernelProperties() {}
+  virtual ~PlatformDarwinKernelProperties() = default;
 
   FileSpecList GetKextDirectories() const {
     const uint32_t idx = ePropertyKextDirectories;
@@ -209,14 +209,9 @@ public:
   }
 };
 
-typedef std::shared_ptr<PlatformDarwinKernelProperties>
-    PlatformDarwinKernelPropertiesSP;
-
-static const PlatformDarwinKernelPropertiesSP &GetGlobalProperties() {
-  static PlatformDarwinKernelPropertiesSP g_settings_sp;
-  if (!g_settings_sp)
-    g_settings_sp = std::make_shared<PlatformDarwinKernelProperties>();
-  return g_settings_sp;
+static PlatformDarwinKernelProperties &GetGlobalProperties() {
+  static PlatformDarwinKernelProperties g_settings;
+  return g_settings;
 }
 
 void PlatformDarwinKernel::DebuggerInitialize(
@@ -225,7 +220,7 @@ void PlatformDarwinKernel::DebuggerInitialize(
           debugger, PlatformDarwinKernelProperties::GetSettingName())) {
     const bool is_global_setting = true;
     PluginManager::CreateSettingForPlatformPlugin(
-        debugger, GetGlobalProperties()->GetValueProperties(),
+        debugger, GetGlobalProperties().GetValueProperties(),
         ConstString("Properties for the PlatformDarwinKernel plug-in."),
         is_global_setting);
   }
@@ -250,7 +245,7 @@ PlatformDarwinKernel::PlatformDarwinKernel(
 ///
 /// The destructor is virtual since this class is designed to be
 /// inherited from by the plug-in instance.
-PlatformDarwinKernel::~PlatformDarwinKernel() {}
+PlatformDarwinKernel::~PlatformDarwinKernel() = default;
 
 void PlatformDarwinKernel::GetStatus(Stream &strm) {
   Platform::GetStatus(strm);
@@ -377,7 +372,7 @@ void PlatformDarwinKernel::CollectKextAndKernelDirectories() {
 }
 
 void PlatformDarwinKernel::GetUserSpecifiedDirectoriesToSearch() {
-  FileSpecList user_dirs(GetGlobalProperties()->GetKextDirectories());
+  FileSpecList user_dirs(GetGlobalProperties().GetKextDirectories());
   std::vector<FileSpec> possible_sdk_dirs;
 
   const uint32_t user_dirs_count = user_dirs.GetSize();

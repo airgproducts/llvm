@@ -19,6 +19,7 @@
 #ifndef LLVM_IR_DATALAYOUT_H
 #define LLVM_IR_DATALAYOUT_H
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -135,6 +136,7 @@ private:
     MM_MachO,
     MM_WinCOFF,
     MM_WinCOFFX86,
+    MM_GOFF,
     MM_Mips,
     MM_XCOFF
   };
@@ -316,6 +318,7 @@ public:
     switch (ManglingMode) {
     case MM_None:
     case MM_ELF:
+    case MM_GOFF:
     case MM_Mips:
     case MM_WinCOFF:
     case MM_XCOFF:
@@ -334,6 +337,8 @@ public:
     case MM_ELF:
     case MM_WinCOFF:
       return ".L";
+    case MM_GOFF:
+      return "@";
     case MM_Mips:
       return "$";
     case MM_MachO:
@@ -514,7 +519,7 @@ public:
 
   /// Returns the minimum ABI-required alignment for the specified type.
   /// FIXME: Deprecate this function once migration to Align is over.
-  unsigned getABITypeAlignment(Type *Ty) const;
+  uint64_t getABITypeAlignment(Type *Ty) const;
 
   /// Returns the minimum ABI-required alignment for the specified type.
   Align getABITypeAlign(Type *Ty) const;
@@ -537,7 +542,7 @@ public:
   ///
   /// This is always at least as good as the ABI alignment.
   /// FIXME: Deprecate this function once migration to Align is over.
-  unsigned getPrefTypeAlignment(Type *Ty) const;
+  uint64_t getPrefTypeAlignment(Type *Ty) const;
 
   /// Returns the preferred stack/global alignment for the specified
   /// type.
@@ -579,6 +584,10 @@ public:
   /// This is used to implement getelementptr.
   int64_t getIndexedOffsetInType(Type *ElemTy, ArrayRef<Value *> Indices) const;
 
+  /// Get GEP indices to access Offset inside ElemTy. ElemTy is updated to be
+  /// the result element type and Offset to be the residual offset.
+  SmallVector<APInt> getGEPIndicesForOffset(Type *&ElemTy, APInt &Offset) const;
+
   /// Returns a StructLayout object, indicating the alignment of the
   /// struct, its size, and the offsets of its fields.
   ///
@@ -589,25 +598,6 @@ public:
   ///
   /// This includes an explicitly requested alignment (if the global has one).
   Align getPreferredAlign(const GlobalVariable *GV) const;
-
-  /// Returns the preferred alignment of the specified global.
-  ///
-  /// This includes an explicitly requested alignment (if the global has one).
-  LLVM_ATTRIBUTE_DEPRECATED(
-      inline unsigned getPreferredAlignment(const GlobalVariable *GV) const,
-      "Use getPreferredAlign instead") {
-    return getPreferredAlign(GV).value();
-  }
-
-  /// Returns the preferred alignment of the specified global, returned
-  /// in log form.
-  ///
-  /// This includes an explicitly requested alignment (if the global has one).
-  LLVM_ATTRIBUTE_DEPRECATED(
-      inline unsigned getPreferredAlignmentLog(const GlobalVariable *GV) const,
-      "Inline where needed") {
-    return Log2(getPreferredAlign(GV));
-  }
 };
 
 inline DataLayout *unwrap(LLVMTargetDataRef P) {

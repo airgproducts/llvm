@@ -497,8 +497,7 @@ static ControlFlowKind CheckFallThrough(AnalysisDeclContext &AC) {
       HasAbnormalEdge = true;
       continue;
     }
-    if (std::find(B.succ_begin(), B.succ_end(), &cfg->getExit())
-        == B.succ_end()) {
+    if (!llvm::is_contained(B.succs(), &cfg->getExit())) {
       HasAbnormalEdge = true;
       continue;
     }
@@ -1080,11 +1079,9 @@ namespace {
       while (!BlockQueue.empty()) {
         const CFGBlock *P = BlockQueue.front();
         BlockQueue.pop_front();
-        for (CFGBlock::const_succ_iterator I = P->succ_begin(),
-                                           E = P->succ_end();
-             I != E; ++I) {
-          if (*I && ReachableBlocks.insert(*I).second)
-            BlockQueue.push_back(*I);
+        for (const CFGBlock *B : P->succs()) {
+          if (B && ReachableBlocks.insert(B).second)
+            BlockQueue.push_back(B);
         }
       }
     }
@@ -1125,7 +1122,7 @@ namespace {
                 // unreachable in all instantiations of the template.
                 if (!IsTemplateInstantiation)
                   S.Diag(AS->getBeginLoc(),
-                         diag::warn_fallthrough_attr_unreachable);
+                         diag::warn_unreachable_fallthrough_attr);
                 markFallthroughVisited(AS);
                 ++AnnotatedCnt;
                 break;
@@ -2275,8 +2272,7 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
       .setAlwaysAdd(Stmt::CStyleCastExprClass)
       .setAlwaysAdd(Stmt::DeclRefExprClass)
       .setAlwaysAdd(Stmt::ImplicitCastExprClass)
-      .setAlwaysAdd(Stmt::UnaryOperatorClass)
-      .setAlwaysAdd(Stmt::AttributedStmtClass);
+      .setAlwaysAdd(Stmt::UnaryOperatorClass);
   }
 
   // Install the logical handler.
@@ -2403,7 +2399,7 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
   }
 
   // Check for violations of "called once" parameter properties.
-  if (S.getLangOpts().ObjC &&
+  if (S.getLangOpts().ObjC && !S.getLangOpts().CPlusPlus &&
       shouldAnalyzeCalledOnceParameters(Diags, D->getBeginLoc())) {
     if (AC.getCFG()) {
       CalledOnceCheckReporter Reporter(S, IPData->CalledOnceData);

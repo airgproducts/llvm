@@ -9,7 +9,7 @@
 #include "PlatformOpenBSD.h"
 #include "lldb/Host/Config.h"
 
-#include <stdio.h>
+#include <cstdio>
 #if LLDB_ENABLE_POSIX
 #include <sys/utsname.h>
 #endif
@@ -86,10 +86,6 @@ const char *PlatformOpenBSD::GetPluginDescriptionStatic(bool is_host) {
     return "Local OpenBSD user platform plug-in.";
   else
     return "Remote OpenBSD user platform plug-in.";
-}
-
-ConstString PlatformOpenBSD::GetPluginName() {
-  return GetPluginNameStatic(IsHost());
 }
 
 void PlatformOpenBSD::Initialize() {

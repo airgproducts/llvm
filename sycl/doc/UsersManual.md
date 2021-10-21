@@ -23,17 +23,15 @@ and not recommended to use in production environment.
     (JIT) compilation target can be added to the list to produce a combination
     of AOT and JIT code in the resulting fat binary.
     The following triples are supported by default:
-    * spir64-unknown-unknown-sycldevice - this is the default generic SPIR-V
-      target;
-    * spir64_x86_64-unknown-unknown-sycldevice - generate code ahead of time
-      for x86_64 CPUs;
-    * spir64_fpga-unknown-unknown-sycldevice - generate code ahead of time for
-      Intel FPGA;
-    * spir64_gen-unknown-unknown-sycldevice - generate code ahead of time for
-      Intel Processor Graphics;
+    * spir64 - this is the default generic SPIR-V target;
+    * spir64_x86_64 - generate code ahead of time for x86_64 CPUs;
+    * spir64_fpga - generate code ahead of time for Intel FPGA;
+    * spir64_gen - generate code ahead of time for Intel Processor Graphics;
+    Full target triples can also be used:
+    * spir64-unknown-unknown, spir64_x86_64-unknown-unknown,
+      spir64_fpga-unknown-unknown, spir64_gen-unknown-unknown
     Available in special build configuration:
-    * nvptx64-nvidia-cuda-sycldevice - generate code ahead of time for CUDA
-      target;
+    * nvptx64-nvidia-cuda - generate code ahead of time for CUDA target;
 
 ## Language options
 
@@ -82,6 +80,15 @@ and not recommended to use in production environment.
     * item class get_id() member function and operator[]
     * nd_item class get_global_id()/get_global_linear_id() member functions
     Enabled by default.
+
+
+**`-fgpu-inline-threshold=<n>`**
+
+    Sets the inline threshold for device compilation to <n>. Note that this
+    option only affects the behaviour of the DPC++ compiler, not target-
+    specific compilers (e.g. OpenCL/Level Zero/Nvidia/AMD target compilers)
+    which may or may not perform additional inlining.
+    Default value is 225.
 
 ## Target toolchain options
 
@@ -169,6 +176,15 @@ and not recommended to use in production environment.
     * auto - the compiler will use a heuristic to select the best way of
       splitting device code. This is default mode.
 
+**`-fsycl-max-parallel-link-jobs=<N>`**
+
+    Experimental feature. When specified, it informs the compiler
+    that it can simultaneously spawn up to `N` processes to perform
+    actions required to link the DPC++ application. This option is
+    only useful in SYCL mode. It only takes effect if link action
+    needs to be executed, i.e. it won't have any effect in presence of
+    options like `-c` or `-E`. Default value of `N` is 1.
+
 **`-f[no-]sycl-device-lib=<lib1>[,<lib2>,...]`**
 
     Enables/disables linking of the device libraries. Supported libraries:
@@ -182,9 +198,8 @@ and not recommended to use in production environment.
     Perform ahead of time compilation for Intel FPGA. It sets the target to
     FPGA and turns on the debug options that are needed to generate FPGA
     reports. It is functionally equivalent shortcut to
-    `-fsycl-targets=spir64_fpga-unknown-unknown-sycldevice -g -MMD` on Linux
-    and `-fsycl-targets=spir64_fpga-unknown-unknown-sycldevice -Zi -MMD` on
-    Windows.
+    `-fsycl-targets=spir64_fpga -g -MMD` on Linux and
+    `-fsycl-targets=spir64_fpga -Zi -MMD` on Windows.
 
 **`-fsycl-link=<output>`**
 
@@ -221,6 +236,26 @@ and not recommended to use in production environment.
     the following: "x86_64", "fpga", "gen", or "all". Specifying "all" is the
     same as specifying -fsycl-help with no argument and emits help for all
     backends.
+
+**`-fsycl-host-compiler=<arg>`**
+
+    Informs the compiler driver that the host compilation step that is performed
+    as part of the greater compilation flow will be performed by the compiler
+    <arg>.  It is expected that <arg> is the compiler to be called, either by
+    name (in which the PATH will be used to discover it) or a fully qualified
+    directory with compiler to invoke.  This option is only useful when -fsycl
+    is provided on the command line.
+
+**`-fsycl-host-compiler-options="opts"`**
+
+    Passes along the space separated quoted "opts" string as option arguments
+    to the compiler specified with the -fsycl-host-compiler=<arg> option.  It is
+    expected that the options used here are compatible with the compiler
+    specified via -fsycl-host-compiler=<arg>.
+
+    NOTE: Using -fsycl-host-compiler-options to pass any kind of phase limiting
+    options (e.g. -c, -E, -S) may interfere with the expected output set during
+    the host compilation.  Doing so is considered undefined behavior.
 
 # Example: SYCL device code compilation
 

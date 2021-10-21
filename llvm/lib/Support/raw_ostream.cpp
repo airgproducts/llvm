@@ -185,7 +185,7 @@ raw_ostream &raw_ostream::write_escaped(StringRef Str,
       // Write out the escaped representation.
       if (UseHexEscapes) {
         *this << '\\' << 'x';
-        *this << hexdigit((c >> 4 & 0xF));
+        *this << hexdigit((c >> 4) & 0xF);
         *this << hexdigit((c >> 0) & 0xF);
       } else {
         // Always use a full 3-character octal escape.
@@ -574,10 +574,8 @@ static int getFD(StringRef Filename, std::error_code &EC,
   // the owner of stdout and may set the "binary" flag globally based on Flags.
   if (Filename == "-") {
     EC = std::error_code();
-    // If user requested binary then put stdout into binary mode if
-    // possible.
-    if (!(Flags & sys::fs::OF_Text))
-      sys::ChangeStdoutToBinary();
+    // Change stdout's text/binary mode based on the Flags.
+    sys::ChangeStdoutMode(Flags);
     return STDOUT_FILENO;
   }
 
@@ -681,7 +679,8 @@ raw_fd_ostream::~raw_fd_ostream() {
   // has_error() and clear the error flag with clear_error() before
   // destructing raw_ostream objects which may have errors.
   if (has_error())
-    report_fatal_error("IO failure on output stream: " + error().message(),
+    report_fatal_error(Twine("IO failure on output stream: ") +
+                           error().message(),
                        /*gen_crash_diag=*/false);
 }
 

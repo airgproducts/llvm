@@ -27,10 +27,10 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/TargetRegistry.h"
 #include <memory>
 #include <utility>
 
@@ -166,7 +166,7 @@ public:
     Ctx = &Context;
     VMContext.reset(new llvm::LLVMContext());
     M.reset(new llvm::Module(MainFileName, *VMContext));
-    M->setDataLayout(Ctx->getTargetInfo().getDataLayout());
+    M->setDataLayout(Ctx->getTargetInfo().getDataLayoutString());
     Builder.reset(new CodeGen::CodeGenModule(
         *Ctx, HeaderSearchOpts, PreprocessorOpts, CodeGenOpts, *M, Diags));
 
@@ -245,7 +245,7 @@ public:
       return;
 
     M->setTargetTriple(Ctx.getTargetInfo().getTriple().getTriple());
-    M->setDataLayout(Ctx.getTargetInfo().getDataLayout());
+    M->setDataLayout(Ctx.getTargetInfo().getDataLayoutString());
 
     // PCH files don't have a signature field in the control block,
     // but LLVM detects DWO CUs by looking for a non-zero DWO id.
@@ -264,7 +264,7 @@ public:
     std::string Error;
     auto Triple = Ctx.getTargetInfo().getTriple();
     if (!llvm::TargetRegistry::lookupTarget(Triple.getTriple(), Error))
-      llvm::report_fatal_error(Error);
+      llvm::report_fatal_error(llvm::Twine(Error));
 
     // Emit the serialized Clang AST into its own section.
     assert(Buffer->IsComplete && "serialization did not complete");
@@ -295,7 +295,7 @@ public:
       llvm::SmallString<0> Buffer;
       clang::EmitBackendOutput(
           Diags, HeaderSearchOpts, CodeGenOpts, TargetOpts, LangOpts,
-          Ctx.getTargetInfo().getDataLayout(), M.get(),
+          Ctx.getTargetInfo().getDataLayoutString(), M.get(),
           BackendAction::Backend_EmitLL,
           std::make_unique<llvm::raw_svector_ostream>(Buffer));
       llvm::dbgs() << Buffer;
@@ -303,9 +303,9 @@ public:
 
     // Use the LLVM backend to emit the pch container.
     clang::EmitBackendOutput(Diags, HeaderSearchOpts, CodeGenOpts, TargetOpts,
-                             LangOpts, Ctx.getTargetInfo().getDataLayout(),
-                             M.get(), BackendAction::Backend_EmitObj,
-                             std::move(OS));
+                             LangOpts,
+                             Ctx.getTargetInfo().getDataLayoutString(), M.get(),
+                             BackendAction::Backend_EmitObj, std::move(OS));
 
     // Free the memory for the temporary buffer.
     llvm::SmallVector<char, 0> Empty;

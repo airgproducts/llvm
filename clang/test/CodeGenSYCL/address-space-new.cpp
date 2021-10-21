@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fsycl-is-device -triple spir64-unknown-unknown-sycldevice -disable-llvm-passes -emit-llvm %s -o - | FileCheck %s
+// RUN: %clang_cc1 -fsycl-is-device -triple spir64-unknown-unknown -disable-llvm-passes -emit-llvm %s -o - | FileCheck %s
 
 struct SpaceWaster {
   int i, j;
@@ -100,10 +100,10 @@ void test() {
   Y yy;
   baz(yy);
   // CHECK: define {{.*}}spir_func void @{{.*}}baz{{.*}}
-  // CHECK: %[[FIRST:[a-zA-Z0-9]+]] = bitcast %struct.{{.*}}.Y addrspace(4)* %{{.*}} to i8 addrspace(4)*
+  // CHECK: %[[FIRST:[a-zA-Z0-9]+]] = bitcast %struct.Y addrspace(4)* %{{.*}} to i8 addrspace(4)*
   // CHECK: %[[OFFSET:[a-zA-Z0-9]+]].ptr = getelementptr inbounds i8, i8 addrspace(4)* %[[FIRST]], i64 8
-  // CHECK: %[[SECOND:[a-zA-Z0-9]+]] = bitcast i8 addrspace(4)* %[[OFFSET]].ptr to %struct.{{.*}}.HasX addrspace(4)*
-  // CHECK: call spir_func void @{{.*}}bar{{.*}}(%struct.{{.*}}.HasX addrspace(4)* align 4 dereferenceable(4) %[[SECOND]])
+  // CHECK: %[[SECOND:[a-zA-Z0-9]+]] = bitcast i8 addrspace(4)* %[[OFFSET]].ptr to %struct.HasX addrspace(4)*
+  // CHECK: call spir_func void @{{.*}}bar{{.*}}(%struct.HasX addrspace(4)* align 4 dereferenceable(4) %[[SECOND]])
 }
 
 template <typename name, typename Func>

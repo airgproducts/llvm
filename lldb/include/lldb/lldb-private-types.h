@@ -58,12 +58,6 @@ struct RegisterInfo {
   /// this register changes. For example, the invalidate list for eax would be
   /// rax ax, ah, and al.
   uint32_t *invalidate_regs;
-  /// A DWARF expression that when evaluated gives the byte size of this
-  /// register.
-  const uint8_t *dynamic_size_dwarf_expr_bytes;
-  /// The length of the DWARF expression in bytes in the
-  /// dynamic_size_dwarf_expr_bytes member.
-  size_t dynamic_size_dwarf_len;
 
   llvm::ArrayRef<uint8_t> data(const uint8_t *context_base) const {
     return llvm::ArrayRef<uint8_t>(context_base + byte_offset, byte_size);
@@ -100,7 +94,7 @@ struct OptionEnumValueElement {
 using OptionEnumValues = llvm::ArrayRef<OptionEnumValueElement>;
 
 struct OptionValidator {
-  virtual ~OptionValidator() {}
+  virtual ~OptionValidator() = default;
   virtual bool IsValid(Platform &platform,
                        const ExecutionContext &target) const = 0;
   virtual const char *ShortConditionString() const = 0;

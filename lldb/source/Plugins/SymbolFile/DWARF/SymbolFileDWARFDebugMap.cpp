@@ -246,7 +246,7 @@ SymbolFileDWARFDebugMap::SymbolFileDWARFDebugMap(ObjectFileSP objfile_sp)
       m_func_indexes(), m_glob_indexes(),
       m_supports_DW_AT_APPLE_objc_complete_type(eLazyBoolCalculate) {}
 
-SymbolFileDWARFDebugMap::~SymbolFileDWARFDebugMap() {}
+SymbolFileDWARFDebugMap::~SymbolFileDWARFDebugMap() = default;
 
 void SymbolFileDWARFDebugMap::InitializeObject() {}
 
@@ -528,8 +528,8 @@ SymbolFileDWARFDebugMap::GetSymbolFileByOSOIndex(uint32_t oso_idx) {
 
 SymbolFileDWARF *
 SymbolFileDWARFDebugMap::GetSymbolFileAsSymbolFileDWARF(SymbolFile *sym_file) {
-  if (sym_file &&
-      sym_file->GetPluginName() == SymbolFileDWARF::GetPluginNameStatic())
+  if (sym_file && sym_file->GetPluginName() ==
+                      SymbolFileDWARF::GetPluginNameStatic().GetStringRef())
     return static_cast<SymbolFileDWARF *>(sym_file);
   return nullptr;
 }
@@ -806,7 +806,7 @@ SymbolFileDWARFDebugMap::ResolveSymbolContext(const Address &exe_so_addr,
 }
 
 uint32_t SymbolFileDWARFDebugMap::ResolveSymbolContext(
-    const FileSpec &file_spec, uint32_t line, bool check_inlines,
+    const SourceLocationSpec &src_location_spec,
     SymbolContextItem resolve_scope, SymbolContextList &sc_list) {
   std::lock_guard<std::recursive_mutex> guard(GetModuleMutex());
   const uint32_t initial = sc_list.GetSize();
@@ -815,18 +815,19 @@ uint32_t SymbolFileDWARFDebugMap::ResolveSymbolContext(
   for (uint32_t i = 0; i < cu_count; ++i) {
     // If we are checking for inlines, then we need to look through all compile
     // units no matter if "file_spec" matches.
-    bool resolve = check_inlines;
+    bool resolve = src_location_spec.GetCheckInlines();
 
     if (!resolve) {
       FileSpec so_file_spec;
       if (GetFileSpecForSO(i, so_file_spec))
-        resolve = FileSpec::Match(file_spec, so_file_spec);
+        resolve =
+            FileSpec::Match(src_location_spec.GetFileSpec(), so_file_spec);
     }
     if (resolve) {
       SymbolFileDWARF *oso_dwarf = GetSymbolFileByOSOIndex(i);
       if (oso_dwarf)
-        oso_dwarf->ResolveSymbolContext(file_spec, line, check_inlines,
-                                        resolve_scope, sc_list);
+        oso_dwarf->ResolveSymbolContext(src_location_spec, resolve_scope,
+                                        sc_list);
     }
   }
   return sc_list.GetSize() - initial;
@@ -1232,13 +1233,6 @@ void SymbolFileDWARFDebugMap::DumpClangAST(Stream &s) {
     return true;
   });
 }
-
-// PluginInterface protocol
-lldb_private::ConstString SymbolFileDWARFDebugMap::GetPluginName() {
-  return GetPluginNameStatic();
-}
-
-uint32_t SymbolFileDWARFDebugMap::GetPluginVersion() { return 1; }
 
 lldb::CompUnitSP
 SymbolFileDWARFDebugMap::GetCompileUnit(SymbolFileDWARF *oso_dwarf) {

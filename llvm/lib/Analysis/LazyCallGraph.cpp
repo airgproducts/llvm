@@ -220,8 +220,7 @@ bool LazyCallGraph::invalidate(Module &, const PreservedAnalyses &PA,
   // Check whether the analysis, all analyses on functions, or the function's
   // CFG have been preserved.
   auto PAC = PA.getChecker<llvm::LazyCallGraphAnalysis>();
-  return !(PAC.preserved() || PAC.preservedSet<AllAnalysesOn<Module>>() ||
-           PAC.preservedSet<CFGAnalyses>());
+  return !(PAC.preserved() || PAC.preservedSet<AllAnalysesOn<Module>>());
 }
 
 LazyCallGraph &LazyCallGraph::operator=(LazyCallGraph &&G) {
@@ -241,7 +240,7 @@ LLVM_DUMP_METHOD void LazyCallGraph::SCC::dump() const {
 }
 #endif
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(EXPENSIVE_CHECKS)
 void LazyCallGraph::SCC::verify() {
   assert(OuterRefSCC && "Can't have a null RefSCC!");
   assert(!Nodes.empty() && "Can't have an empty SCC!");
@@ -333,7 +332,7 @@ LLVM_DUMP_METHOD void LazyCallGraph::RefSCC::dump() const {
 }
 #endif
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(EXPENSIVE_CHECKS)
 void LazyCallGraph::RefSCC::verify() {
   assert(G && "Can't have a null graph!");
   assert(!SCCs.empty() && "Can't have an empty SCC!");

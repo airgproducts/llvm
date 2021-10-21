@@ -11,8 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
@@ -302,7 +302,7 @@ public:
   using SPIRVToLLVMConversion<spirv::AccessChainOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::AccessChainOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::AccessChainOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dstType = typeConverter.convertType(op.component_ptr().getType());
     if (!dstType)
@@ -327,7 +327,7 @@ public:
   using SPIRVToLLVMConversion<spirv::AddressOfOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::AddressOfOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::AddressOfOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dstType = typeConverter.convertType(op.pointer().getType());
     if (!dstType)
@@ -343,7 +343,7 @@ public:
   using SPIRVToLLVMConversion<spirv::BitFieldInsertOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::BitFieldInsertOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::BitFieldInsertOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcType = op.getType();
     auto dstType = typeConverter.convertType(srcType);
@@ -387,7 +387,7 @@ public:
   using SPIRVToLLVMConversion<spirv::ConstantOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::ConstantOp constOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::ConstantOp constOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcType = constOp.getType();
     if (!srcType.isa<VectorType>() && !srcType.isIntOrFloat())
@@ -419,8 +419,8 @@ public:
       rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(constOp, dstType, dstAttr);
       return success();
     }
-    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(constOp, dstType, operands,
-                                                  constOp->getAttrs());
+    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(
+        constOp, dstType, adaptor.getOperands(), constOp->getAttrs());
     return success();
   }
 };
@@ -431,7 +431,7 @@ public:
   using SPIRVToLLVMConversion<spirv::BitFieldSExtractOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::BitFieldSExtractOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::BitFieldSExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcType = op.getType();
     auto dstType = typeConverter.convertType(srcType);
@@ -484,7 +484,7 @@ public:
   using SPIRVToLLVMConversion<spirv::BitFieldUExtractOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::BitFieldUExtractOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::BitFieldUExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcType = op.getType();
     auto dstType = typeConverter.convertType(srcType);
@@ -518,9 +518,9 @@ public:
   using SPIRVToLLVMConversion<spirv::BranchOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::BranchOp branchOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::BranchOp branchOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::BrOp>(branchOp, operands,
+    rewriter.replaceOpWithNewOp<LLVM::BrOp>(branchOp, adaptor.getOperands(),
                                             branchOp.getTarget());
     return success();
   }
@@ -533,7 +533,7 @@ public:
       spirv::BranchConditionalOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::BranchConditionalOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::BranchConditionalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // If branch weights exist, map them to 32-bit integer vector.
     ElementsAttr branchWeights = nullptr;
@@ -560,7 +560,7 @@ public:
   using SPIRVToLLVMConversion<spirv::CompositeExtractOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::CompositeExtractOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::CompositeExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dstType = this->typeConverter.convertType(op.getType());
     if (!dstType)
@@ -590,7 +590,7 @@ public:
   using SPIRVToLLVMConversion<spirv::CompositeInsertOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::CompositeInsertOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::CompositeInsertOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dstType = this->typeConverter.convertType(op.getType());
     if (!dstType)
@@ -619,13 +619,13 @@ public:
   using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVOp operation, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp operation, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dstType = this->typeConverter.convertType(operation.getType());
     if (!dstType)
       return failure();
-    rewriter.template replaceOpWithNewOp<LLVMOp>(operation, dstType, operands,
-                                                 operation->getAttrs());
+    rewriter.template replaceOpWithNewOp<LLVMOp>(
+        operation, dstType, adaptor.getOperands(), operation->getAttrs());
     return success();
   }
 };
@@ -638,19 +638,21 @@ public:
   using SPIRVToLLVMConversion<spirv::ExecutionModeOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::ExecutionModeOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::ExecutionModeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // First, create the global struct's name that would be associated with
     // this entry point's execution mode. We set it to be:
-    //   __spv__{SPIR-V module name}_{function name}_execution_mode_info
+    //   __spv__{SPIR-V module name}_{function name}_execution_mode_info_{mode}
     ModuleOp module = op->getParentOfType<ModuleOp>();
+    IntegerAttr executionModeAttr = op.execution_modeAttr();
     std::string moduleName;
     if (module.getName().hasValue())
       moduleName = "_" + module.getName().getValue().str();
     else
       moduleName = "";
-    std::string executionModeInfoName = llvm::formatv(
-        "__spv_{0}_{1}_execution_mode_info", moduleName, op.fn().str());
+    std::string executionModeInfoName =
+        llvm::formatv("__spv_{0}_{1}_execution_mode_info_{2}", moduleName,
+                      op.fn().str(), executionModeAttr.getValue());
 
     MLIRContext *context = rewriter.getContext();
     OpBuilder::InsertionGuard guard(rewriter);
@@ -674,7 +676,8 @@ public:
     // Create `llvm.mlir.global` with initializer region containing one block.
     auto global = rewriter.create<LLVM::GlobalOp>(
         UnknownLoc::get(context), structType, /*isConstant=*/true,
-        LLVM::Linkage::External, executionModeInfoName, Attribute());
+        LLVM::Linkage::External, executionModeInfoName, Attribute(),
+        /*alignment=*/0);
     Location loc = global.getLoc();
     Region &region = global.getInitializerRegion();
     Block *block = rewriter.createBlock(&region);
@@ -682,7 +685,6 @@ public:
     // Initialize the struct and set the execution mode value.
     rewriter.setInsertionPoint(block, block->begin());
     Value structValue = rewriter.create<LLVM::UndefOp>(loc, structType);
-    IntegerAttr executionModeAttr = op.execution_modeAttr();
     Value executionMode =
         rewriter.create<LLVM::ConstantOp>(loc, llvmI32Type, executionModeAttr);
     structValue = rewriter.create<LLVM::InsertValueOp>(
@@ -716,7 +718,7 @@ public:
   using SPIRVToLLVMConversion<spirv::GlobalVariableOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::GlobalVariableOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::GlobalVariableOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Currently, there is no support of initialization with a constant value in
     // SPIR-V dialect. Specialization constants are not considered as well.
@@ -732,17 +734,22 @@ public:
     // required by SPIR-V runner.
     // This is okay because multiple invocations are not supported yet.
     auto storageClass = srcType.getStorageClass();
-    if (storageClass != spirv::StorageClass::Input &&
-        storageClass != spirv::StorageClass::Private &&
-        storageClass != spirv::StorageClass::Output &&
-        storageClass != spirv::StorageClass::StorageBuffer) {
+    switch (storageClass) {
+    case spirv::StorageClass::Input:
+    case spirv::StorageClass::Private:
+    case spirv::StorageClass::Output:
+    case spirv::StorageClass::StorageBuffer:
+    case spirv::StorageClass::UniformConstant:
+      break;
+    default:
       return failure();
     }
 
     // LLVM dialect spec: "If the global value is a constant, storing into it is
-    // not allowed.". This corresponds to SPIR-V 'Input' storage class that is
-    // read-only.
-    bool isConstant = storageClass == spirv::StorageClass::Input;
+    // not allowed.". This corresponds to SPIR-V 'Input' and 'UniformConstant'
+    // storage class that is read-only.
+    bool isConstant = (storageClass == spirv::StorageClass::Input) ||
+                      (storageClass == spirv::StorageClass::UniformConstant);
     // SPIR-V spec: "By default, functions and global variables are private to a
     // module and cannot be accessed by other modules. However, a module may be
     // written to export or import functions and global (module scope)
@@ -751,8 +758,14 @@ public:
     auto linkage = storageClass == spirv::StorageClass::Private
                        ? LLVM::Linkage::Private
                        : LLVM::Linkage::External;
-    rewriter.replaceOpWithNewOp<LLVM::GlobalOp>(
-        op, dstType, isConstant, linkage, op.sym_name(), Attribute());
+    auto newGlobalOp = rewriter.replaceOpWithNewOp<LLVM::GlobalOp>(
+        op, dstType, isConstant, linkage, op.sym_name(), Attribute(),
+        /*alignment=*/0);
+
+    // Attach location attribute if applicable
+    if (op.locationAttr())
+      newGlobalOp->setAttr(op.locationAttrName(), op.locationAttr());
+
     return success();
   }
 };
@@ -765,7 +778,7 @@ public:
   using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVOp operation, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp operation, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     Type fromType = operation.operand().getType();
@@ -777,12 +790,12 @@ public:
 
     if (getBitWidth(fromType) < getBitWidth(toType)) {
       rewriter.template replaceOpWithNewOp<LLVMExtOp>(operation, dstType,
-                                                      operands);
+                                                      adaptor.getOperands());
       return success();
     }
     if (getBitWidth(fromType) > getBitWidth(toType)) {
       rewriter.template replaceOpWithNewOp<LLVMTruncOp>(operation, dstType,
-                                                        operands);
+                                                        adaptor.getOperands());
       return success();
     }
     return failure();
@@ -795,18 +808,18 @@ public:
   using SPIRVToLLVMConversion<spirv::FunctionCallOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::FunctionCallOp callOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::FunctionCallOp callOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (callOp.getNumResults() == 0) {
-      rewriter.replaceOpWithNewOp<LLVM::CallOp>(callOp, llvm::None, operands,
-                                                callOp->getAttrs());
+      rewriter.replaceOpWithNewOp<LLVM::CallOp>(
+          callOp, llvm::None, adaptor.getOperands(), callOp->getAttrs());
       return success();
     }
 
     // Function returns a single result.
     auto dstType = typeConverter.convertType(callOp.getType(0));
-    rewriter.replaceOpWithNewOp<LLVM::CallOp>(callOp, dstType, operands,
-                                              callOp->getAttrs());
+    rewriter.replaceOpWithNewOp<LLVM::CallOp>(
+        callOp, dstType, adaptor.getOperands(), callOp->getAttrs());
     return success();
   }
 };
@@ -818,7 +831,7 @@ public:
   using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVOp operation, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp operation, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto dstType = this->typeConverter.convertType(operation.getType());
@@ -839,7 +852,7 @@ public:
   using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVOp operation, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp operation, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto dstType = this->typeConverter.convertType(operation.getType());
@@ -859,7 +872,7 @@ public:
   using SPIRVToLLVMConversion<spirv::GLSLInverseSqrtOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::GLSLInverseSqrtOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::GLSLInverseSqrtOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcType = op.getType();
     auto dstType = typeConverter.convertType(srcType);
@@ -875,15 +888,14 @@ public:
 };
 
 /// Converts `spv.Load` and `spv.Store` to LLVM dialect.
-template <typename SPIRVop>
-class LoadStorePattern : public SPIRVToLLVMConversion<SPIRVop> {
+template <typename SPIRVOp>
+class LoadStorePattern : public SPIRVToLLVMConversion<SPIRVOp> {
 public:
-  using SPIRVToLLVMConversion<SPIRVop>::SPIRVToLLVMConversion;
+  using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVop op, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp op, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     if (!op.memory_access().hasValue()) {
       return replaceWithLoadOrStore(
           op, rewriter, this->typeConverter, /*alignment=*/0,
@@ -916,9 +928,8 @@ public:
   using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVOp notOp, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp notOp, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     auto srcType = notOp.getType();
     auto dstType = this->typeConverter.convertType(srcType);
     if (!dstType)
@@ -945,7 +956,7 @@ public:
   using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVOp op, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp op, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.eraseOp(op);
     return success();
@@ -957,7 +968,7 @@ public:
   using SPIRVToLLVMConversion<spirv::ReturnOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::ReturnOp returnOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::ReturnOp returnOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(returnOp, ArrayRef<Type>(),
                                                 ArrayRef<Value>());
@@ -970,10 +981,10 @@ public:
   using SPIRVToLLVMConversion<spirv::ReturnValueOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::ReturnValueOp returnValueOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::ReturnValueOp returnValueOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(returnValueOp, ArrayRef<Type>(),
-                                                operands);
+                                                adaptor.getOperands());
     return success();
   }
 };
@@ -1031,7 +1042,7 @@ public:
   using SPIRVToLLVMConversion<spirv::LoopOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::LoopOp loopOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::LoopOp loopOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // There is no support of loop control at the moment.
     if (loopOp.loop_control() != spirv::LoopControl::None)
@@ -1078,7 +1089,7 @@ public:
   using SPIRVToLLVMConversion<spirv::SelectionOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::SelectionOp op, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::SelectionOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // There is no support for `Flatten` or `DontFlatten` selection control at
     // the moment. This are just compiler hints and can be performed during the
@@ -1147,7 +1158,7 @@ public:
   using SPIRVToLLVMConversion<SPIRVOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(SPIRVOp operation, ArrayRef<Value> operands,
+  matchAndRewrite(SPIRVOp operation, typename SPIRVOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto dstType = this->typeConverter.convertType(operation.getType());
@@ -1159,7 +1170,7 @@ public:
 
     if (op1Type == op2Type) {
       rewriter.template replaceOpWithNewOp<LLVMOp>(operation, dstType,
-                                                   operands);
+                                                   adaptor.getOperands());
       return success();
     }
 
@@ -1184,7 +1195,7 @@ public:
   using SPIRVToLLVMConversion<spirv::GLSLTanOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::GLSLTanOp tanOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::GLSLTanOp tanOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dstType = typeConverter.convertType(tanOp.getType());
     if (!dstType)
@@ -1209,7 +1220,7 @@ public:
   using SPIRVToLLVMConversion<spirv::GLSLTanhOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::GLSLTanhOp tanhOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::GLSLTanhOp tanhOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcType = tanhOp.getType();
     auto dstType = typeConverter.convertType(srcType);
@@ -1237,7 +1248,7 @@ public:
   using SPIRVToLLVMConversion<spirv::VariableOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::VariableOp varOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::VariableOp varOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcType = varOp.getType();
     // Initialization is supported for scalars and vectors only.
@@ -1272,7 +1283,7 @@ public:
   using SPIRVToLLVMConversion<spirv::FuncOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::FuncOp funcOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     // Convert function signature. At the moment LLVMType converter is enough
@@ -1335,30 +1346,16 @@ public:
   using SPIRVToLLVMConversion<spirv::ModuleOp>::SPIRVToLLVMConversion;
 
   LogicalResult
-  matchAndRewrite(spirv::ModuleOp spvModuleOp, ArrayRef<Value> operands,
+  matchAndRewrite(spirv::ModuleOp spvModuleOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto newModuleOp =
         rewriter.create<ModuleOp>(spvModuleOp.getLoc(), spvModuleOp.getName());
-    rewriter.inlineRegionBefore(spvModuleOp.body(), newModuleOp.getBody());
+    rewriter.inlineRegionBefore(spvModuleOp.getRegion(), newModuleOp.getBody());
 
     // Remove the terminator block that was automatically added by builder
     rewriter.eraseBlock(&newModuleOp.getBodyRegion().back());
     rewriter.eraseOp(spvModuleOp);
-    return success();
-  }
-};
-
-class ModuleEndConversionPattern
-    : public SPIRVToLLVMConversion<spirv::ModuleEndOp> {
-public:
-  using SPIRVToLLVMConversion<spirv::ModuleEndOp>::SPIRVToLLVMConversion;
-
-  LogicalResult
-  matchAndRewrite(spirv::ModuleEndOp moduleEndOp, ArrayRef<Value> operands,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    rewriter.eraseOp(moduleEndOp);
     return success();
   }
 };
@@ -1505,8 +1502,7 @@ void mlir::populateSPIRVToLLVMFunctionConversionPatterns(
 
 void mlir::populateSPIRVToLLVMModuleConversionPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<ModuleConversionPattern, ModuleEndConversionPattern>(
-      patterns.getContext(), typeConverter);
+  patterns.add<ModuleConversionPattern>(patterns.getContext(), typeConverter);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1536,12 +1532,13 @@ void mlir::encodeBindAttribute(ModuleOp module) {
             llvm::formatv("{0}_descriptor_set{1}_binding{2}", moduleAndName,
                           std::to_string(descriptorSet.getInt()),
                           std::to_string(binding.getInt()));
+        auto nameAttr = StringAttr::get(op->getContext(), name);
 
         // Replace all symbol uses and set the new symbol name. Finally, remove
         // descriptor set and binding attributes.
-        if (failed(SymbolTable::replaceAllSymbolUses(op, name, spvModule)))
+        if (failed(SymbolTable::replaceAllSymbolUses(op, nameAttr, spvModule)))
           op.emitError("unable to replace all symbol uses for ") << name;
-        SymbolTable::setSymbolName(op, name);
+        SymbolTable::setSymbolName(op, nameAttr);
         op->removeAttr(kDescriptorSet);
         op->removeAttr(kBinding);
       }

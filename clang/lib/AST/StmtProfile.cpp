@@ -468,6 +468,13 @@ void OMPClauseProfiler::VisitOMPSizesClause(const OMPSizesClause *C) {
       Profiler->VisitExpr(E);
 }
 
+void OMPClauseProfiler::VisitOMPFullClause(const OMPFullClause *C) {}
+
+void OMPClauseProfiler::VisitOMPPartialClause(const OMPPartialClause *C) {
+  if (const Expr *Factor = C->getFactor())
+    Profiler->VisitExpr(Factor);
+}
+
 void OMPClauseProfiler::VisitOMPAllocatorClause(const OMPAllocatorClause *C) {
   if (C->getAllocator())
     Profiler->VisitStmt(C->getAllocator());
@@ -896,6 +903,10 @@ void StmtProfiler::VisitOMPLoopDirective(const OMPLoopDirective *S) {
   VisitOMPLoopBasedDirective(S);
 }
 
+void StmtProfiler::VisitOMPMetaDirective(const OMPMetaDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
 void StmtProfiler::VisitOMPParallelDirective(const OMPParallelDirective *S) {
   VisitOMPExecutableDirective(S);
 }
@@ -904,8 +915,17 @@ void StmtProfiler::VisitOMPSimdDirective(const OMPSimdDirective *S) {
   VisitOMPLoopDirective(S);
 }
 
-void StmtProfiler::VisitOMPTileDirective(const OMPTileDirective *S) {
+void StmtProfiler::VisitOMPLoopTransformationDirective(
+    const OMPLoopTransformationDirective *S) {
   VisitOMPLoopBasedDirective(S);
+}
+
+void StmtProfiler::VisitOMPTileDirective(const OMPTileDirective *S) {
+  VisitOMPLoopTransformationDirective(S);
+}
+
+void StmtProfiler::VisitOMPUnrollDirective(const OMPUnrollDirective *S) {
+  VisitOMPLoopTransformationDirective(S);
 }
 
 void StmtProfiler::VisitOMPForDirective(const OMPForDirective *S) {
@@ -1188,6 +1208,17 @@ void StmtProfiler::VisitDeclRefExpr(const DeclRefExpr *S) {
     if (S->hasExplicitTemplateArgs())
       VisitTemplateArguments(S->getTemplateArgs(), S->getNumTemplateArgs());
   }
+}
+
+void StmtProfiler::VisitSYCLUniqueStableNameExpr(
+    const SYCLUniqueStableNameExpr *S) {
+  VisitExpr(S);
+  VisitType(S->getTypeSourceInfo()->getType());
+}
+
+void StmtProfiler::VisitSYCLUniqueStableIdExpr(
+    const SYCLUniqueStableIdExpr *S) {
+  VisitExpr(S);
 }
 
 void StmtProfiler::VisitPredefinedExpr(const PredefinedExpr *S) {
@@ -1814,6 +1845,28 @@ void StmtProfiler::VisitBuiltinBitCastExpr(const BuiltinBitCastExpr *S) {
   VisitType(S->getTypeInfoAsWritten()->getType());
 }
 
+void StmtProfiler::VisitSYCLBuiltinNumFieldsExpr(
+    const SYCLBuiltinNumFieldsExpr *E) {
+  VisitType(E->getSourceType());
+}
+
+void StmtProfiler::VisitSYCLBuiltinFieldTypeExpr(
+    const SYCLBuiltinFieldTypeExpr *E) {
+  VisitType(E->getSourceType());
+  VisitExpr(E->getIndex());
+}
+
+void StmtProfiler::VisitSYCLBuiltinNumBasesExpr(
+    const SYCLBuiltinNumBasesExpr *E) {
+  VisitType(E->getSourceType());
+}
+
+void StmtProfiler::VisitSYCLBuiltinBaseTypeExpr(
+    const SYCLBuiltinBaseTypeExpr *E) {
+  VisitType(E->getSourceType());
+  VisitExpr(E->getIndex());
+}
+
 void StmtProfiler::VisitCXXAddrspaceCastExpr(const CXXAddrspaceCastExpr *S) {
   VisitCXXNamedCastExpr(S);
 }
@@ -1907,30 +1960,9 @@ StmtProfiler::VisitCXXTemporaryObjectExpr(const CXXTemporaryObjectExpr *S) {
 void
 StmtProfiler::VisitLambdaExpr(const LambdaExpr *S) {
   VisitExpr(S);
-  for (LambdaExpr::capture_iterator C = S->explicit_capture_begin(),
-                                 CEnd = S->explicit_capture_end();
-       C != CEnd; ++C) {
-    if (C->capturesVLAType())
-      continue;
-
-    ID.AddInteger(C->getCaptureKind());
-    switch (C->getCaptureKind()) {
-    case LCK_StarThis:
-    case LCK_This:
-      break;
-    case LCK_ByRef:
-    case LCK_ByCopy:
-      VisitDecl(C->getCapturedVar());
-      ID.AddBoolean(C->isPackExpansion());
-      break;
-    case LCK_VLAType:
-      llvm_unreachable("VLA type in explicit captures.");
-    }
-  }
-  // Note: If we actually needed to be able to match lambda
-  // expressions, we would have to consider parameters and return type
-  // here, among other things.
-  VisitStmt(S->getBody());
+  // C++20 [temp.over.link]p5:
+  //   Two lambda-expressions are never considered equivalent.
+  VisitDecl(S->getLambdaClass());
 }
 
 void

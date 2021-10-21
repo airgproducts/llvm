@@ -254,7 +254,6 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   case Musl: return "musl";
   case MuslEABI: return "musleabi";
   case MuslEABIHF: return "musleabihf";
-  case SYCLDevice: return "sycldevice";
   case MuslX32: return "muslx32";
   case Simulator: return "simulator";
   }
@@ -571,7 +570,6 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
       .StartsWith("cygnus", Triple::Cygnus)
       .StartsWith("coreclr", Triple::CoreCLR)
       .StartsWith("simulator", Triple::Simulator)
-      .StartsWith("sycldevice", Triple::SYCLDevice)
       .StartsWith("macabi", Triple::MacABI)
       .Default(Triple::UnknownEnvironment);
 }
@@ -674,6 +672,12 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
     return Triple::ARMSubArch_v8_6a;
   case ARM::ArchKind::ARMV8_7A:
     return Triple::ARMSubArch_v8_7a;
+  case ARM::ArchKind::ARMV9A:
+    return Triple::ARMSubArch_v9;
+  case ARM::ArchKind::ARMV9_1A:
+    return Triple::ARMSubArch_v9_1a;
+  case ARM::ArchKind::ARMV9_2A:
+    return Triple::ARMSubArch_v9_2a;
   case ARM::ArchKind::ARMV8R:
     return Triple::ARMSubArch_v8r;
   case ARM::ArchKind::ARMV8MBaseline:
@@ -1734,6 +1738,7 @@ StringRef Triple::getARMCPUForArch(StringRef MArch) const {
   switch (getOS()) {
   case llvm::Triple::FreeBSD:
   case llvm::Triple::NetBSD:
+  case llvm::Triple::OpenBSD:
     if (!MArch.empty() && MArch == "v6")
       return "arm1176jzf-s";
     if (!MArch.empty() && MArch == "v7")
@@ -1741,7 +1746,9 @@ StringRef Triple::getARMCPUForArch(StringRef MArch) const {
     break;
   case llvm::Triple::Win32:
     // FIXME: this is invalid for WindowsCE
-    return "cortex-a9";
+    if (ARM::parseArchVersion(MArch) <= 7)
+      return "cortex-a9";
+    break;
   case llvm::Triple::IOS:
   case llvm::Triple::MacOSX:
   case llvm::Triple::TvOS:

@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <errno.h>
-#include <stdlib.h>
+#include <cerrno>
+#include <cstdlib>
 
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Threading.h"
@@ -127,11 +127,6 @@ ProcessMachCore::~ProcessMachCore() {
   // destroy the broadcaster.
   Finalize();
 }
-
-// PluginInterface
-ConstString ProcessMachCore::GetPluginName() { return GetPluginNameStatic(); }
-
-uint32_t ProcessMachCore::GetPluginVersion() { return 1; }
 
 bool ProcessMachCore::GetDynamicLoaderAddress(lldb::addr_t addr) {
   Log *log(lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_DYNAMIC_LOADER |
@@ -289,7 +284,7 @@ Status ProcessMachCore::DoLoadCore() {
   addr_t vm_addr = 0;
   for (uint32_t i = 0; i < num_sections; ++i) {
     Section *section = section_list->GetSectionAtIndex(i).get();
-    if (section) {
+    if (section && section->GetFileSize() > 0) {
       lldb::addr_t section_vm_addr = section->GetFileAddress();
       FileRange file_range(section->GetFileOffset(), section->GetFileSize());
       VMRangeToFileOffset::Entry range_entry(
@@ -299,20 +294,12 @@ Status ProcessMachCore::DoLoadCore() {
         ranges_are_sorted = false;
       vm_addr = section->GetFileAddress();
       VMRangeToFileOffset::Entry *last_entry = m_core_aranges.Back();
-      //            printf ("LC_SEGMENT[%u] arange=[0x%16.16" PRIx64 " -
-      //            0x%16.16" PRIx64 "), frange=[0x%8.8x - 0x%8.8x)\n",
-      //                    i,
-      //                    range_entry.GetRangeBase(),
-      //                    range_entry.GetRangeEnd(),
-      //                    range_entry.data.GetRangeBase(),
-      //                    range_entry.data.GetRangeEnd());
 
       if (last_entry &&
           last_entry->GetRangeEnd() == range_entry.GetRangeBase() &&
           last_entry->data.GetRangeEnd() == range_entry.data.GetRangeBase()) {
         last_entry->SetRangeEnd(range_entry.GetRangeEnd());
         last_entry->data.SetRangeEnd(range_entry.data.GetRangeEnd());
-        // puts("combine");
       } else {
         m_core_aranges.Append(range_entry);
       }
@@ -331,7 +318,6 @@ Status ProcessMachCore::DoLoadCore() {
     m_core_aranges.Sort();
     m_core_range_infos.Sort();
   }
-
 
   bool found_main_binary_definitively = false;
 
@@ -412,6 +398,14 @@ Status ProcessMachCore::DoLoadCore() {
         m_dyld_plugin_name = DynamicLoaderStatic::GetPluginNameStatic();
       }
     }
+  }
+
+  // If we have a "all image infos" LC_NOTE, try to load all of the
+  // binaries listed, and set their Section load addresses in the Target.
+  if (found_main_binary_definitively == false &&
+      core_objfile->LoadCoreFileImages(*this)) {
+    m_dyld_plugin_name = DynamicLoaderDarwinKernel::GetPluginNameStatic();
+    found_main_binary_definitively = true;
   }
 
   if (!found_main_binary_definitively &&
@@ -534,6 +528,11 @@ Status ProcessMachCore::DoLoadCore() {
   if (arch.IsValid())
     GetTarget().SetArchitecture(arch);
 
+  addr_t address_mask = core_objfile->GetAddressMask();
+  if (address_mask != 0) {
+    SetCodeAddressMask(address_mask);
+    SetDataAddressMask(address_mask);
+  }
   return error;
 }
 

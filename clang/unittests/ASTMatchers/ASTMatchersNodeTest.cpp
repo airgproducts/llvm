@@ -876,7 +876,7 @@ TEST_P(ASTMatchersTest, Matcher_NoexceptExpression) {
   EXPECT_TRUE(
       matches("void foo() noexcept; bool bar = noexcept(foo());", NoExcept));
   EXPECT_TRUE(notMatches("void foo() noexcept;", NoExcept));
-  EXPECT_TRUE(notMatches("void foo() noexcept(1+1);", NoExcept));
+  EXPECT_TRUE(notMatches("void foo() noexcept(0+1);", NoExcept));
   EXPECT_TRUE(matches("void foo() noexcept(noexcept(1+1));", NoExcept));
 }
 
@@ -1428,6 +1428,22 @@ TEST_P(ASTMatchersTest, UsingDecl_MatchesShadowUsingDelcarations) {
                       usingDecl(hasAnyUsingShadowDecl(hasName("a")))));
 }
 
+TEST_P(ASTMatchersTest, UsingEnumDecl_MatchesUsingEnumDeclarations) {
+  if (!GetParam().isCXX20OrLater()) {
+    return;
+  }
+  EXPECT_TRUE(
+      matches("namespace X { enum x {}; } using enum X::x;", usingEnumDecl()));
+}
+
+TEST_P(ASTMatchersTest, UsingEnumDecl_MatchesShadowUsingDeclarations) {
+  if (!GetParam().isCXX20OrLater()) {
+    return;
+  }
+  EXPECT_TRUE(matches("namespace f { enum a {b}; } using enum f::a;",
+                      usingEnumDecl(hasAnyUsingShadowDecl(hasName("b")))));
+}
+
 TEST_P(ASTMatchersTest, UsingDirectiveDecl_MatchesUsingNamespace) {
   if (!GetParam().isCXX()) {
     return;
@@ -1869,6 +1885,29 @@ TEST_P(ASTMatchersTest, NestedNameSpecifier) {
                  nestedNameSpecifier()));
 }
 
+TEST_P(ASTMatchersTest, Attr) {
+  // Windows adds some implicit attributes.
+  bool AutomaticAttributes = StringRef(GetParam().Target).contains("win32");
+  if (GetParam().isCXX11OrLater()) {
+    EXPECT_TRUE(matches("struct [[clang::warn_unused_result]] F{};", attr()));
+
+    // Unknown attributes are not parsed into an AST node.
+    if (!AutomaticAttributes) {
+      EXPECT_TRUE(notMatches("int x [[unknownattr]];", attr()));
+    }
+  }
+  if (GetParam().isCXX17OrLater()) {
+    EXPECT_TRUE(matches("struct [[nodiscard]] F{};", attr()));
+  }
+  EXPECT_TRUE(matches("int x(int * __attribute__((nonnull)) );", attr()));
+  if (!AutomaticAttributes) {
+    EXPECT_TRUE(notMatches("struct F{}; int x(int *);", attr()));
+    // Some known attributes are not parsed into an AST node.
+    EXPECT_TRUE(notMatches("typedef int x __attribute__((ext_vector_type(1)));",
+                           attr()));
+  }
+}
+
 TEST_P(ASTMatchersTest, NullStmt) {
   EXPECT_TRUE(matches("void f() {int i;;}", nullStmt()));
   EXPECT_TRUE(notMatches("void f() {int i;}", nullStmt()));
@@ -2037,6 +2076,165 @@ TEST_P(ASTMatchersTest, TypeAliasTemplateDecl) {
       matches(Code, typeAliasTemplateDecl(hasName("typeAliasTemplateDecl"))));
   EXPECT_TRUE(
       notMatches(Code, typeAliasTemplateDecl(hasName("typeAliasDecl"))));
+}
+
+TEST_P(ASTMatchersTest, QualifiedTypeLocTest_BindsToConstIntVarDecl) {
+  EXPECT_TRUE(matches("const int x = 0;",
+                      qualifiedTypeLoc(loc(asString("const int")))));
+}
+
+TEST_P(ASTMatchersTest, QualifiedTypeLocTest_BindsToConstIntFunctionDecl) {
+  EXPECT_TRUE(matches("const int f() { return 5; }",
+                      qualifiedTypeLoc(loc(asString("const int")))));
+}
+
+TEST_P(ASTMatchersTest, QualifiedTypeLocTest_DoesNotBindToUnqualifiedVarDecl) {
+  EXPECT_TRUE(notMatches("int x = 0;", qualifiedTypeLoc(loc(asString("int")))));
+}
+
+TEST_P(ASTMatchersTest, QualifiedTypeLocTest_IntDoesNotBindToConstIntDecl) {
+  EXPECT_TRUE(
+      notMatches("const int x = 0;", qualifiedTypeLoc(loc(asString("int")))));
+}
+
+TEST_P(ASTMatchersTest, QualifiedTypeLocTest_IntDoesNotBindToConstFloatDecl) {
+  EXPECT_TRUE(
+      notMatches("const float x = 0;", qualifiedTypeLoc(loc(asString("int")))));
+}
+
+TEST_P(ASTMatchersTest, PointerTypeLocTest_BindsToAnyPointerTypeLoc) {
+  auto matcher = varDecl(hasName("x"), hasTypeLoc(pointerTypeLoc()));
+  EXPECT_TRUE(matches("int* x;", matcher));
+  EXPECT_TRUE(matches("float* x;", matcher));
+  EXPECT_TRUE(matches("char* x;", matcher));
+  EXPECT_TRUE(matches("void* x;", matcher));
+}
+
+TEST_P(ASTMatchersTest, PointerTypeLocTest_DoesNotBindToNonPointerTypeLoc) {
+  auto matcher = varDecl(hasName("x"), hasTypeLoc(pointerTypeLoc()));
+  EXPECT_TRUE(notMatches("int x;", matcher));
+  EXPECT_TRUE(notMatches("float x;", matcher));
+  EXPECT_TRUE(notMatches("char x;", matcher));
+}
+
+TEST_P(ASTMatchersTest, ReferenceTypeLocTest_BindsToAnyReferenceTypeLoc) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  auto matcher = varDecl(hasName("r"), hasTypeLoc(referenceTypeLoc()));
+  EXPECT_TRUE(matches("int rr = 3; int& r = rr;", matcher));
+  EXPECT_TRUE(matches("int rr = 3; auto& r = rr;", matcher));
+  EXPECT_TRUE(matches("int rr = 3; const int& r = rr;", matcher));
+  EXPECT_TRUE(matches("float rr = 3.0; float& r = rr;", matcher));
+  EXPECT_TRUE(matches("char rr = 'a'; char& r = rr;", matcher));
+}
+
+TEST_P(ASTMatchersTest, ReferenceTypeLocTest_DoesNotBindToNonReferenceTypeLoc) {
+  auto matcher = varDecl(hasName("r"), hasTypeLoc(referenceTypeLoc()));
+  EXPECT_TRUE(notMatches("int r;", matcher));
+  EXPECT_TRUE(notMatches("int r = 3;", matcher));
+  EXPECT_TRUE(notMatches("const int r = 3;", matcher));
+  EXPECT_TRUE(notMatches("int* r;", matcher));
+  EXPECT_TRUE(notMatches("float r;", matcher));
+  EXPECT_TRUE(notMatches("char r;", matcher));
+}
+
+TEST_P(ASTMatchersTest, ReferenceTypeLocTest_BindsToAnyRvalueReferenceTypeLoc) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  auto matcher = varDecl(hasName("r"), hasTypeLoc(referenceTypeLoc()));
+  EXPECT_TRUE(matches("int&& r = 3;", matcher));
+  EXPECT_TRUE(matches("auto&& r = 3;", matcher));
+  EXPECT_TRUE(matches("float&& r = 3.0;", matcher));
+}
+
+TEST_P(
+    ASTMatchersTest,
+    TemplateSpecializationTypeLocTest_BindsToTemplateSpecializationExplicitInstantiation) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(
+      matches("template <typename T> class C {}; template class C<int>;",
+              classTemplateSpecializationDecl(
+                  hasName("C"), hasTypeLoc(templateSpecializationTypeLoc()))));
+}
+
+TEST_P(ASTMatchersTest,
+       TemplateSpecializationTypeLocTest_BindsToVarDeclTemplateSpecialization) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(matches(
+      "template <typename T> class C {}; C<char> var;",
+      varDecl(hasName("var"), hasTypeLoc(templateSpecializationTypeLoc()))));
+}
+
+TEST_P(
+    ASTMatchersTest,
+    TemplateSpecializationTypeLocTest_DoesNotBindToNonTemplateSpecialization) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(notMatches(
+      "class C {}; C var;",
+      varDecl(hasName("var"), hasTypeLoc(templateSpecializationTypeLoc()))));
+}
+
+TEST_P(ASTMatchersTest,
+       ElaboratedTypeLocTest_BindsToElaboratedObjectDeclaration) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(matches("class C {}; class C c;",
+                      varDecl(hasName("c"), hasTypeLoc(elaboratedTypeLoc()))));
+}
+
+TEST_P(ASTMatchersTest,
+       ElaboratedTypeLocTest_BindsToNamespaceElaboratedObjectDeclaration) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(matches("namespace N { class D {}; } N::D d;",
+                      varDecl(hasName("d"), hasTypeLoc(elaboratedTypeLoc()))));
+}
+
+TEST_P(ASTMatchersTest,
+       ElaboratedTypeLocTest_BindsToElaboratedStructDeclaration) {
+  EXPECT_TRUE(matches("struct s {}; struct s ss;",
+                      varDecl(hasName("ss"), hasTypeLoc(elaboratedTypeLoc()))));
+}
+
+TEST_P(ASTMatchersTest,
+       ElaboratedTypeLocTest_DoesNotBindToNonElaboratedObjectDeclaration) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(
+      notMatches("class C {}; C c;",
+                 varDecl(hasName("c"), hasTypeLoc(elaboratedTypeLoc()))));
+}
+
+TEST_P(
+    ASTMatchersTest,
+    ElaboratedTypeLocTest_DoesNotBindToNamespaceNonElaboratedObjectDeclaration) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(
+      notMatches("namespace N { class D {}; } using N::D; D d;",
+                 varDecl(hasName("d"), hasTypeLoc(elaboratedTypeLoc()))));
+}
+
+TEST_P(ASTMatchersTest,
+       ElaboratedTypeLocTest_DoesNotBindToNonElaboratedStructDeclaration) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(
+      notMatches("struct s {}; s ss;",
+                 varDecl(hasName("ss"), hasTypeLoc(elaboratedTypeLoc()))));
 }
 
 TEST(ASTMatchersTestObjC, ObjCMessageExpr) {
@@ -2302,8 +2500,8 @@ static std::vector<TestClangConfig> allTestClangConfigs() {
   return all_configs;
 }
 
-INSTANTIATE_TEST_CASE_P(ASTMatchersTests, ASTMatchersTest,
-                        testing::ValuesIn(allTestClangConfigs()), );
+INSTANTIATE_TEST_SUITE_P(ASTMatchersTests, ASTMatchersTest,
+                         testing::ValuesIn(allTestClangConfigs()));
 
 } // namespace ast_matchers
 } // namespace clang

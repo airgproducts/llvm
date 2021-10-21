@@ -19,9 +19,6 @@
 #pragma GCC system_header
 #endif
 
-_LIBCPP_PUSH_MACROS
-#include <__undef_macros>
-
 _LIBCPP_BEGIN_NAMESPACE_STD
 
 template <class _Tp>
@@ -76,8 +73,12 @@ void return_temporary_buffer(_Tp* __p) _NOEXCEPT
   _VSTD::__libcpp_deallocate_unsized((void*)__p, _LIBCPP_ALIGNOF(_Tp));
 }
 
+struct __return_temporary_buffer
+{
+    template <class _Tp>
+    _LIBCPP_INLINE_VISIBILITY void operator()(_Tp* __p) const {_VSTD::return_temporary_buffer(__p);}
+};
+
 _LIBCPP_END_NAMESPACE_STD
 
-_LIBCPP_POP_MACROS
-
-#endif  // _LIBCPP___MEMORY_TEMPORARY_BUFFER_H
+#endif // _LIBCPP___MEMORY_TEMPORARY_BUFFER_H

@@ -20,9 +20,9 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Scalar.h"
@@ -122,21 +122,20 @@ void BPFTargetMachine::adjustPassManager(PassManagerBuilder &Builder) {
       });
 }
 
-void BPFTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB,
-                                                    bool DebugPassManager) {
+void BPFTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerPipelineStartEPCallback(
-      [=](ModulePassManager &MPM, PassBuilder::OptimizationLevel) {
-        FunctionPassManager FPM(DebugPassManager);
+      [=](ModulePassManager &MPM, OptimizationLevel) {
+        FunctionPassManager FPM;
         FPM.addPass(BPFAbstractMemberAccessPass(this));
         FPM.addPass(BPFPreserveDITypePass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
   PB.registerPeepholeEPCallback([=](FunctionPassManager &FPM,
-                                    PassBuilder::OptimizationLevel Level) {
+                                    OptimizationLevel Level) {
     FPM.addPass(SimplifyCFGPass(SimplifyCFGOptions().hoistCommonInsts(true)));
   });
   PB.registerPipelineEarlySimplificationEPCallback(
-      [=](ModulePassManager &MPM, PassBuilder::OptimizationLevel) {
+      [=](ModulePassManager &MPM, OptimizationLevel) {
         MPM.addPass(BPFAdjustOptPass());
       });
 }

@@ -23,9 +23,9 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Scalar.h"
 
@@ -238,9 +238,9 @@ const HexagonSubtarget *
 HexagonTargetMachine::getSubtargetImpl(const Function &F) const {
   AttributeList FnAttrs = F.getAttributes();
   Attribute CPUAttr =
-      FnAttrs.getAttribute(AttributeList::FunctionIndex, "target-cpu");
+      FnAttrs.getFnAttr("target-cpu");
   Attribute FSAttr =
-      FnAttrs.getAttribute(AttributeList::FunctionIndex, "target-features");
+      FnAttrs.getFnAttr("target-features");
 
   std::string CPU =
       CPUAttr.isValid() ? CPUAttr.getValueAsString().str() : TargetCPU;
@@ -251,8 +251,7 @@ HexagonTargetMachine::getSubtargetImpl(const Function &F) const {
   // Creating a separate target feature is not strictly necessary, it only
   // exists to make "unsafe-fp-math" force creating a new subtarget.
 
-  if (FnAttrs.hasFnAttribute("unsafe-fp-math") &&
-      F.getFnAttribute("unsafe-fp-math").getValueAsString() == "true")
+  if (F.getFnAttribute("unsafe-fp-math").getValueAsBool())
     FS = FS.empty() ? "+unsafe-fp" : "+unsafe-fp," + FS;
 
   auto &I = SubtargetMap[CPU + FS];
@@ -279,14 +278,13 @@ void HexagonTargetMachine::adjustPassManager(PassManagerBuilder &PMB) {
       });
 }
 
-void HexagonTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB,
-                                                        bool DebugPassManager) {
+void HexagonTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerLateLoopOptimizationsEPCallback(
-      [=](LoopPassManager &LPM, PassBuilder::OptimizationLevel Level) {
+      [=](LoopPassManager &LPM, OptimizationLevel Level) {
         LPM.addPass(HexagonLoopIdiomRecognitionPass());
       });
   PB.registerLoopOptimizerEndEPCallback(
-      [=](LoopPassManager &LPM, PassBuilder::OptimizationLevel Level) {
+      [=](LoopPassManager &LPM, OptimizationLevel Level) {
         LPM.addPass(HexagonVectorLoopCarriedReusePass());
       });
 }
@@ -449,11 +447,11 @@ void HexagonPassConfig::addPreEmitPass() {
   }
 
   // Packetization is mandatory: it handles gather/scatter at all opt levels.
-  addPass(createHexagonPacketizer(NoOpt), false);
+  addPass(createHexagonPacketizer(NoOpt));
 
   if (EnableVectorPrint)
-    addPass(createHexagonVectorPrint(), false);
+    addPass(createHexagonVectorPrint());
 
   // Add CFI instructions if necessary.
-  addPass(createHexagonCallFrameInformation(), false);
+  addPass(createHexagonCallFrameInformation());
 }

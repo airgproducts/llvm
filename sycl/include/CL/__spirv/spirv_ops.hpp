@@ -1,4 +1,4 @@
-//==---------- spirv_ops.hpp --- SPIRV operations -------------------------==//
+//==----------- spirv_ops.hpp --- SPIRV operations -------------------------==//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -22,6 +22,69 @@
 #endif
 
 #ifdef __SYCL_DEVICE_ONLY__
+template <typename T, std::size_t R, std::size_t C,
+          __spv::MatrixLayout L = __spv::MatrixLayout::RowMajor,
+          __spv::Scope::Flag S = __spv::Scope::Flag::Subgroup>
+extern SYCL_EXTERNAL __spv::__spirv_JointMatrixINTEL<T, R, C, L, S> *
+__spirv_JointMatrixLoadINTEL(T *Ptr, std::size_t Stride,
+                             __spv::MatrixLayout Layout = L,
+                             __spv::Scope::Flag Sc = S, int MemOperand = 0);
+
+template <typename T, std::size_t R, std::size_t C,
+          __spv::MatrixLayout L = __spv::MatrixLayout::RowMajor,
+          __spv::Scope::Flag S = __spv::Scope::Flag::Subgroup>
+extern SYCL_EXTERNAL void __spirv_JointMatrixStoreINTEL(
+    T *Ptr, __spv::__spirv_JointMatrixINTEL<T, R, C, L, S> *Object,
+    std::size_t Stride, __spv::MatrixLayout Layout = L,
+    __spv::Scope::Flag Sc = S, int MemOperand = 0);
+
+template <typename T1, typename T2, std::size_t M, std::size_t K, std::size_t N,
+          __spv::MatrixLayout LA = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LB = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LC = __spv::MatrixLayout::RowMajor,
+          __spv::Scope::Flag S = __spv::Scope::Flag::Subgroup>
+extern SYCL_EXTERNAL __spv::__spirv_JointMatrixINTEL<T2, M, N, LC, S> *
+__spirv_JointMatrixMadINTEL(
+    __spv::__spirv_JointMatrixINTEL<T1, M, K, LA, S> *A,
+    __spv::__spirv_JointMatrixINTEL<T1, K, N, LB, S> *B,
+    __spv::__spirv_JointMatrixINTEL<T2, M, N, LC, S> *C,
+    __spv::Scope::Flag Sc = __spv::Scope::Flag::Subgroup);
+
+template <typename T1, typename T2, typename T3, std::size_t M, std::size_t K,
+          std::size_t N, __spv::MatrixLayout LA = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LB = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LC = __spv::MatrixLayout::RowMajor,
+          __spv::Scope::Flag S = __spv::Scope::Flag::Subgroup>
+extern SYCL_EXTERNAL __spv::__spirv_JointMatrixINTEL<T3, M, N, LC, S> *
+__spirv_JointMatrixUUMadINTEL(
+    __spv::__spirv_JointMatrixINTEL<T1, M, K, LA, S> *A,
+    __spv::__spirv_JointMatrixINTEL<T2, K, N, LB, S> *B,
+    __spv::__spirv_JointMatrixINTEL<T3, M, N, LC, S> *C,
+    __spv::Scope::Flag Sc = __spv::Scope::Flag::Subgroup);
+
+template <typename T1, typename T2, typename T3, std::size_t M, std::size_t K,
+          std::size_t N, __spv::MatrixLayout LA = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LB = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LC = __spv::MatrixLayout::RowMajor,
+          __spv::Scope::Flag S = __spv::Scope::Flag::Subgroup>
+extern SYCL_EXTERNAL __spv::__spirv_JointMatrixINTEL<T3, M, N, LC, S> *
+__spirv_JointMatrixUSMadINTEL(
+    __spv::__spirv_JointMatrixINTEL<T1, M, K, LA, S> *A,
+    __spv::__spirv_JointMatrixINTEL<T2, K, N, LB, S> *B,
+    __spv::__spirv_JointMatrixINTEL<T3, M, N, LC, S> *C,
+    __spv::Scope::Flag Sc = __spv::Scope::Flag::Subgroup);
+
+template <typename T1, typename T2, typename T3, std::size_t M, std::size_t K,
+          std::size_t N, __spv::MatrixLayout LA = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LB = __spv::MatrixLayout::RowMajor,
+          __spv::MatrixLayout LC = __spv::MatrixLayout::RowMajor,
+          __spv::Scope::Flag S = __spv::Scope::Flag::Subgroup>
+extern SYCL_EXTERNAL __spv::__spirv_JointMatrixINTEL<T3, M, N, LC, S> *
+__spirv_JointMatrixSUMadINTEL(
+    __spv::__spirv_JointMatrixINTEL<T1, M, K, LA, S> *A,
+    __spv::__spirv_JointMatrixINTEL<T2, K, N, LB, S> *B,
+    __spv::__spirv_JointMatrixINTEL<T3, M, N, LC, S> *C,
+    __spv::Scope::Flag Sc = __spv::Scope::Flag::Subgroup);
 
 #ifndef __SPIRV_BUILTIN_DECLARATIONS__
 #error                                                                         \
@@ -199,18 +262,18 @@ __spirv_GenericCastToPtrExplicit_ToLocal(const void *Ptr,
 
 template <typename dataT>
 extern __attribute__((opencl_global)) dataT *
-__spirv_GenericCastToPtrExplicit_ToGlobal(
-    const void *Ptr, __spv::StorageClass::Flag S) noexcept {
-  return (__attribute__((opencl_global))
-          dataT *)__spirv_GenericCastToPtrExplicit_ToGlobal(Ptr, S);
+__SYCL_GenericCastToPtrExplicit_ToGlobal(const void *Ptr) noexcept {
+  return (__attribute__((opencl_global)) dataT *)
+      __spirv_GenericCastToPtrExplicit_ToGlobal(
+          Ptr, __spv::StorageClass::CrossWorkgroup);
 }
 
 template <typename dataT>
 extern __attribute__((opencl_local)) dataT *
-__spirv_GenericCastToPtrExplicit_ToLocal(const void *Ptr,
-                                         __spv::StorageClass::Flag S) noexcept {
-  return (__attribute__((opencl_local))
-          dataT *)__spirv_GenericCastToPtrExplicit_ToLocal(Ptr, S);
+__SYCL_GenericCastToPtrExplicit_ToLocal(const void *Ptr) noexcept {
+  return (__attribute__((opencl_local)) dataT *)
+      __spirv_GenericCastToPtrExplicit_ToLocal(Ptr,
+                                               __spv::StorageClass::Workgroup);
 }
 
 template <typename dataT>
@@ -566,6 +629,12 @@ extern SYCL_EXTERNAL WPipeTy<dataT> __spirv_CreatePipeFromPipeStorage_write(
 extern SYCL_EXTERNAL void
 __spirv_ocl_prefetch(const __attribute__((opencl_global)) char *Ptr,
                      size_t NumBytes) noexcept;
+
+extern SYCL_EXTERNAL uint16_t __spirv_ConvertFToBF16INTEL(float) noexcept;
+extern SYCL_EXTERNAL float __spirv_ConvertBF16ToFINTEL(uint16_t) noexcept;
+
+__SYCL_CONVERGENT__ extern SYCL_EXTERNAL __SYCL_EXPORT __ocl_vec_t<uint32_t, 4>
+__spirv_GroupNonUniformBallot(uint32_t Execution, bool Predicate) noexcept;
 
 #else // if !__SYCL_DEVICE_ONLY__
 

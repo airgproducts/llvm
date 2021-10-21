@@ -32,10 +32,7 @@ function(add_sycl_rt_library LIB_NAME)
     target_compile_options(${LIB_OBJ_NAME} PRIVATE ${ARG_COMPILE_OPTIONS})
   endif()
 
-  #To-Do: Remove dependency on icd loader and opencl headers.
   add_dependencies(${LIB_OBJ_NAME}
-    ocl-icd
-    ocl-headers
     sycl-headers
   )
 
@@ -46,6 +43,8 @@ function(add_sycl_rt_library LIB_NAME)
     target_link_libraries(${LIB_NAME} PRIVATE ${ARG_XPTI_LIB})
   endif()
 
+  target_compile_definitions(${LIB_OBJ_NAME} PRIVATE __SYCL_INTERNAL_API )
+
   if (MSVC)
     target_compile_definitions(${LIB_OBJ_NAME} PRIVATE __SYCL_BUILD_SYCL_DLL )
     target_link_libraries(${LIB_NAME} PRIVATE shlwapi)
@@ -53,8 +52,12 @@ function(add_sycl_rt_library LIB_NAME)
     target_compile_options(${LIB_OBJ_NAME} PUBLIC
                            -fvisibility=hidden -fvisibility-inlines-hidden)
     set(linker_script "${CMAKE_CURRENT_SOURCE_DIR}/ld-version-script.txt")
+    set(abi_linker_script "${CMAKE_CURRENT_SOURCE_DIR}/abi_replacements_linux.txt")
     target_link_libraries(
-      ${LIB_NAME} PRIVATE "-Wl,--version-script=${linker_script}")
+      ${LIB_NAME} PRIVATE "-Wl,${abi_linker_script}")
+    set_target_properties(${LIB_NAME} PROPERTIES LINK_DEPENDS ${abi_linker_script})
+    target_link_libraries(
+        ${LIB_NAME} PRIVATE "-Wl,--version-script=${linker_script}")
     set_target_properties(${LIB_NAME} PROPERTIES LINK_DEPENDS ${linker_script})
     if (SYCL_ENABLE_XPTI_TRACING)
       target_link_libraries(${LIB_NAME} PRIVATE dl)
@@ -68,23 +71,22 @@ function(add_sycl_rt_library LIB_NAME)
     PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
       "${sycl_inc_dir}"
-      ${OpenCL_INCLUDE_DIRS}
+  )
+  #TODO: Remove dependency on icd loader and opencl headers.
+  target_link_libraries(${LIB_OBJ_NAME}
+    PRIVATE OpenCL-Headers
   )
 
   find_package(Threads REQUIRED)
 
   target_link_libraries(${LIB_NAME}
     PRIVATE
-      ${OpenCL_LIBRARIES}
+      OpenCL-ICD
       ${CMAKE_DL_LIBS}
       ${CMAKE_THREAD_LIBS_INIT}
     PUBLIC
       $<$<BOOL:${SYCL_BUILD_PI_CUDA}>:pi_cuda>
   )
-
-  target_compile_definitions(${LIB_OBJ_NAME}
-    PUBLIC
-      $<$<BOOL:${SYCL_BUILD_PI_CUDA}>:USE_PI_CUDA>)
 
   add_common_options(${LIB_NAME} ${LIB_OBJ_NAME})
 
@@ -101,11 +103,11 @@ function(add_sycl_rt_library LIB_NAME)
 endfunction(add_sycl_rt_library)
 
 set(SYCL_SOURCES
-    "${sycl_inc_dir}/CL/sycl.hpp"
     "backend/opencl.cpp"
     "backend/level_zero.cpp"
     "backend.cpp"
     "detail/accessor_impl.cpp"
+    "detail/allowlist.cpp"
     "detail/buffer_impl.cpp"
     "detail/builtins_common.cpp"
     "detail/builtins_geometric.cpp"
@@ -174,6 +176,7 @@ set(SYCL_SOURCES
     "spirv_ops.cpp"
     "$<$<PLATFORM_ID:Windows>:detail/windows_pi.cpp>"
     "$<$<OR:$<PLATFORM_ID:Linux>,$<PLATFORM_ID:Darwin>>:detail/posix_pi.cpp>"
+    "$<$<PLATFORM_ID:Windows>:abi_replacements_windows.cpp>"
 )
 
 if (MSVC)
