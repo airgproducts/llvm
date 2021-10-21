@@ -1,0 +1,57 @@
+name: docker-build
+
+on:
+  push:
+    branches:
+      - 'private'
+
+jobs:
+  docker:
+    strategy:
+      max-parallel: 4
+    runs-on: ubuntu-latest
+    steps:      
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Create more disk space
+        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /opt/ghc && sudo rm -rf "/usr/local/share/boost" && sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          version: latest
+      - name: Login to ghcr
+        uses: docker/login-action@v1 
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build all
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: false
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,mode=max,dest=/tmp/.buildx-cache
+      - name: Build and push compiler
+        id: docker_push_compiler
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          target: compiler
+          tags: ghcr.io/airgproducts/llvm-compiler:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,mode=max,dest=/tmp/.buildx-cache
+      - name: Build and push runtime
+        id: docker_push_runtime
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          target: runtime
+          tags: ghcr.io/airgproducts/llvm-runtime:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,mode=max,dest=/tmp/.buildx-cache
+      - name: Image digest
+        run: echo ${{ steps.docker_build.outputs.digest }}

@@ -29,8 +29,7 @@ __SYCL_EXPORT void __spirv_ControlBarrier(__spv::Scope Execution,
   (void)Execution;
   (void)Memory;
   (void)Semantics;
-  std::cerr << "Barrier is not supported on the host device yet.\n";
-  abort();
+  atomic_thread_fence(std::memory_order_seq_cst);
 }
 
 __SYCL_EXPORT void __spirv_MemoryBarrier(__spv::Scope Memory,
